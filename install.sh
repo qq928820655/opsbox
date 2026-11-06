@@ -11,7 +11,8 @@
 #   目标端口被其他应用占用 -> 交互询问：1)顺延可用端口(默认) 2)指定端口 3)停止占用者后使用
 #                            非交互默认顺延，可用 --on-conflict stop 强制释放
 # 服务管理:
-#   sh install.sh status|start|stop|restart [all|ops|bridge|latency]
+#   sh install.sh status|start|stop|restart|menu [all|ops|bridge|latency]
+#   curl -fsSL .../install.sh | sh -s -- status        （同理 start/stop/restart/menu）
 #   安装后也可直接用本机脚本: sh /opt/opsbox/manage.sh（无参数进入交互菜单）
 
 set -eu
@@ -44,7 +45,7 @@ die()  { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 SET_TARGET=0; SET_PASSWORD=0; SET_BRIDGE=0; SET_LATENCY=0; SET_START=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    status|start|stop|restart)
+    status|start|stop|restart|menu)
       [ -n "$ACTION" ] && die "管理动作只能指定一个"
       ACTION="$1"; shift ;;
     all|ops|opsbox|bridge|ai-terminal-bridge|latency|latency-test)
@@ -62,7 +63,7 @@ while [ $# -gt 0 ]; do
     --start)        DO_START=1; SET_START=1; shift ;;
     --no-start)     DO_START=0; SET_START=1; shift ;;
     --on-conflict)  ON_CONFLICT="$2"; shift 2 ;;
-    -h|--help)      sed -n '2,22p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help)      sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "未知参数: $1" ;;
   esac
 done
@@ -187,6 +188,42 @@ mgmt_norm_svc() {
 }
 
 if [ -n "$ACTION" ]; then
+  if [ "$ACTION" = "menu" ]; then
+    while :; do
+      echo
+      echo "========== opsbox 服务管理 =========="
+      for _c in opsbox bridge latency; do mgmt_status_one "$_c"; done
+      echo "  1) 启动全部   2) 停止全部   3) 重启全部"
+      echo "  4) 启动单个   5) 停止单个   6) 重启单个"
+      echo "  0) 退出"
+      printf '请选择: '
+      if [ -t 0 ]; then
+        IFS= read -r sel
+      else
+        IFS= read -r sel 2>/dev/null </dev/tty || { warn "当前无交互终端，请直接用: sh install.sh status|start|stop|restart [all|ops|bridge|latency]"; exit 1; }
+      fi
+      case "$sel" in
+        1) for _c in opsbox bridge latency; do mgmt_start_one "$_c"; done ;;
+        2) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; done ;;
+        3) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
+        4|5|6)
+          printf '组件（opsbox/bridge/latency，回车=全部）: '
+          if [ -t 0 ]; then
+            IFS= read -r sel_c
+          else
+            IFS= read -r sel_c 2>/dev/null </dev/tty || { warn "当前无交互终端"; exit 1; }
+          fi
+          [ -z "$sel_c" ] && sel_c=all
+          case "$sel" in
+            4) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_start_one "$_c"; done ;;
+            5) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_stop_one "$_c"; done ;;
+            6) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
+          esac
+          ;;
+        0|q|Q) exit 0 ;;
+      esac
+    done
+  fi
   for _c in $(mgmt_norm_svc "$SVC_WORD"); do
     case "$ACTION" in
       status)  mgmt_status_one "$_c" ;;
@@ -208,8 +245,8 @@ fi
 ask() { # ask 提示 默认值（直接回车取默认）
   _prompt="$1"; _def="$2"; _ans=""
   if [ "$INTERACTIVE" = 1 ]; then
-    printf '%s（回车=%s）' "$_prompt" "$_def" >/dev/tty 2>/dev/null || true
-    IFS= read -r _ans </dev/tty 2>/dev/null || _ans=""
+    printf '%s（回车=%s）' "$_prompt" "$_def" 2>/dev/null >/dev/tty || true
+    IFS= read -r _ans 2>/dev/null </dev/tty || _ans=""
   fi
   if [ -n "$_ans" ]; then printf '%s' "$_ans"; else printf '%s' "$_def"; fi
 }
@@ -221,8 +258,8 @@ ask_yes() { # ask_yes 提示 默认(y/n)；0=是 1=否
       y|Y) _hint="[Y/n]" ;;
       *)   _hint="[y/N]" ;;
     esac
-    printf '%s %s（回车=默认）' "$_prompt" "$_hint" >/dev/tty 2>/dev/null || true
-    IFS= read -r _ans </dev/tty 2>/dev/null || _ans=""
+    printf '%s %s（回车=默认）' "$_prompt" "$_hint" 2>/dev/null >/dev/tty || true
+    IFS= read -r _ans 2>/dev/null </dev/tty || _ans=""
   fi
   [ -z "$_ans" ] && _ans="$_def"
   case "$_ans" in
@@ -385,7 +422,7 @@ resolve_port() { # resolve_port 应用类型 期望端口 目标目录
       echo "    1) 顺延到下一个可用端口（默认）"
       echo "    2) 指定其他端口"
       echo "    3) 停止该应用并使用端口 $_want"
-    } >/dev/tty 2>/dev/null || true
+    } 2>/dev/null >/dev/tty || true
     _sel=$(ask "请选择" "1")
     case "$_sel" in
       2)
@@ -715,7 +752,7 @@ menu() {
     if [ -t 0 ]; then
       IFS= read -r sel
     else
-      IFS= read -r sel </dev/tty 2>/dev/null || IFS= read -r sel
+      IFS= read -r sel 2>/dev/null </dev/tty || IFS= read -r sel
     fi
     case "$sel" in
       1) do_action start all ;;
@@ -723,7 +760,7 @@ menu() {
       3) do_action restart all ;;
       4|5|6)
         printf '组件（opsbox/bridge/latency，回车=全部）: '
-        if [ -t 0 ]; then IFS= read -r comp; else IFS= read -r comp </dev/tty 2>/dev/null || IFS= read -r comp; fi
+        if [ -t 0 ]; then IFS= read -r comp; else IFS= read -r comp 2>/dev/null </dev/tty || IFS= read -r comp; fi
         [ -z "$comp" ] && comp=all
         case "$sel" in 4) do_action start "$comp" ;; 5) do_action stop "$comp" ;; 6) do_action restart "$comp" ;; esac
         ;;
