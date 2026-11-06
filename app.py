@@ -40,6 +40,8 @@ AITB_TOKEN = os.environ.get("AITB_TOKEN") or PASSWORD
 LATENCY_URL = (os.environ.get("LATENCY_URL") or "http://127.0.0.1:8005").rstrip("/")
 AITB_PUBLIC = (os.environ.get("AITB_PUBLIC") or "").rstrip("/")
 LATENCY_PUBLIC = (os.environ.get("LATENCY_PUBLIC") or "").rstrip("/")
+DOLA_URL = (os.environ.get("DOLA_URL") or "http://127.0.0.1:8004").rstrip("/")
+DOLA_PUBLIC = (os.environ.get("DOLA_PUBLIC") or "").rstrip("/")
 MAX_EDIT = 5 * 1024 * 1024
 MAX_ARCHIVES = 4 * 1024 * 1024 * 1024
 TOKEN_TTL = 7 * 24 * 3600
@@ -861,10 +863,19 @@ def _aitb_mint_token() -> str:
     return tok
 
 
+def _aitb_port() -> int:
+    """本机个性化：bridge 实际端口从 AITB_URL 解析（上游硬编码 8787，本机部署在 8790）。"""
+    try:
+        p = urllib.parse.urlparse(AITB_URL).port
+    except ValueError:
+        p = None
+    return p or 8787
+
+
 @app.get("/api/launch/bridge")
 async def launch_bridge(request: Request):
     _auth(request)
-    base = _public_base(request, 8787, AITB_PUBLIC)
+    base = _public_base(request, _aitb_port(), AITB_PUBLIC)
     try:
         tok = _aitb_mint_token()
     except Exception as exc:
@@ -885,6 +896,16 @@ async def launch_latency(request: Request):
         "ok": True,
         "url": f"{_public_base(request, 8005, LATENCY_PUBLIC)}/",
         "name": "链路探针",
+    }
+
+
+@app.get("/api/launch/dola")
+async def launch_dola(request: Request):
+    _auth(request)
+    return {
+        "ok": True,
+        "url": f"{_public_base(request, 8004, DOLA_PUBLIC)}/panel",
+        "name": "出片面板",
     }
 
 

@@ -7,7 +7,7 @@
 - **资源监控**：CPU / 内存（RSS 口径）/ 网络 / 磁盘 IO / 分区使用 / Top 进程，1 秒采样，默认首页
 - **文件管理**：浏览、编辑、上传、下载、解压、搜索、批量操作
 - **预警设置**：内存 RSS 或磁盘使用率超阈值时经 PushPlus 推送
-- **内置应用入口**：下拉菜单直达 ai-terminal-bridge 与 latency-test，共享登录态
+- **内置应用入口**：下拉菜单直达终端桥接、链路探针与出片面板，共享登录态（bridge 免登录）
 
 ## 快速开始
 
@@ -32,6 +32,8 @@ cp .env.example .env    # 设置 OPS_PASSWORD
 | `AITB_PUBLIC` | 空（按 Host 推导） | 终端桥接公网基址覆盖 |
 | `LATENCY_URL` | `http://127.0.0.1:8005` | 链路探针内网地址 |
 | `LATENCY_PUBLIC` | 空（按 Host 推导） | 链路探针公网基址覆盖 |
+| `DOLA_URL` | `http://127.0.0.1:8004` | 出片面板（dola-pool）内网地址 |
+| `DOLA_PUBLIC` | 空（按 Host 推导） | 出片面板公网基址覆盖 |
 
 ## 接口
 
@@ -47,7 +49,7 @@ cp .env.example .env    # 设置 OPS_PASSWORD
 
 ## 接入的上游
 
-本仓库内置接入两个独立应用，来源与版本登记见 [UPSTREAMS.md](UPSTREAMS.md)。
+本仓库内置接入三个独立应用（终端桥接、链路探针、出片面板），来源与版本登记见 [UPSTREAMS.md](UPSTREAMS.md)。
 
 ## 许可
 

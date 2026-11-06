@@ -150,6 +150,7 @@ canvas{width:100%;height:130px;display:block}
       <div class="menu-sep"></div>
       <button id="menuBridge" role="menuitem" onclick="launchApp('bridge')">🖥 终端桥接</button>
       <button id="menuLatency" role="menuitem" onclick="launchApp('latency')">📶 链路探针</button>
+      <button id="menuDola" role="menuitem" onclick="launchApp('dola')">出片面板</button>
     </div>
   </div>
   <button id="navRes" class="on" onclick="switchTab('res')">📊 资源监控</button>
@@ -793,7 +794,9 @@ window.addEventListener('resize', ()=>{ if(activeTab==='res' && !paused) resRefr
 /* ---- 内置应用跳转（复用 ops 登录态，无需二次登录） ---- */
 async function launchApp(kind){
   closeBrandMenu();
-  const path = kind === 'bridge' ? '/api/launch/bridge' : '/api/launch/latency';
+  const paths = {'bridge':'/api/launch/bridge','latency':'/api/launch/latency','dola':'/api/launch/dola'};
+  const path = paths[kind];
+  if(!path)return;
   try{
     const r = await api(path);
     window.open(r.url, '_blank', 'noopener');
