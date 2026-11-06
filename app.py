@@ -3,10 +3,13 @@
 文件 API：/api/list read save mkdir touch delete rename copy move upload
          download preview unarchive search
 监控 API：/api/stats（后台 1s 采样线程：CPU/内存/网络/磁盘IO/Top进程/分区）
+预警 API：/api/alert/config（读写配置）、/api/alert/test（测试推送）
+         后台线程按间隔检测 RSS 内存占比与磁盘使用率，超阈值经 pushplus 推送。
 鉴权：同一密码登录，HMAC token（复用原 filebrowser .secret，旧 token 继续有效）。
 """
 import hashlib
 import hmac
+import json
 import mimetypes
 import os
 import platform
@@ -16,6 +19,9 @@ import tarfile
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import zipfile
 from collections import deque
 from pathlib import Path
@@ -50,6 +56,167 @@ def _secret() -> bytes:
 
 SECRET = _secret()
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+# ===== 预警配置 =====
+ALERT_FILE = os.path.join(BASE_DIR, "alert_config.json")
+ALERT_DEFAULTS = {
+    "enabled": False,
+    "machine_name": "",
+    "preview_url": "",
+    "pushplus_token": "",
+    "mem_threshold": 85,
+    "disk_threshold": 90,
+    "cooldown_min": 30,
+    "check_interval_s": 60,
+}
+_alert_last = {"mem": 0.0, "disk": 0.0}   # 上次成功推送时间戳，用于冷却
+
+
+def _alert_load() -> dict:
+    cfg = dict(ALERT_DEFAULTS)
+    try:
+        with open(ALERT_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            cfg.update({k: v for k, v in data.items() if k in ALERT_DEFAULTS})
+    except (OSError, ValueError):
+        pass
+    return cfg
+
+
+def _alert_save(cfg: dict) -> dict:
+    merged = dict(ALERT_DEFAULTS)
+    merged.update({k: cfg[k] for k in ALERT_DEFAULTS if k in cfg})
+    tmp = ALERT_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, ALERT_FILE)
+    return merged
+
+
+def _default_machine_name() -> str:
+    try:
+        return platform.node() or "unknown"
+    except Exception:
+        return "unknown"
+
+
+def _pushplus_send(token: str, title: str, content: str) -> tuple[bool, str]:
+    """调用 pushplus 推送。返回 (成功, 说明)。"""
+    if not token:
+        return False, "未配置 pushplus token"
+    payload = urllib.parse.urlencode({
+        "token": token,
+        "title": title,
+        "content": content,
+        "template": "html",
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.pushplus.plus/send",
+        data=payload,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read().decode("utf-8", "replace")
+        try:
+            data = json.loads(body)
+        except ValueError:
+            return False, f"响应无法解析: {body[:200]}"
+        code = data.get("code")
+        if code == 200:
+            return True, "ok"
+        return False, f"pushplus 返回 code={code} msg={data.get('msg')}"
+    except urllib.error.HTTPError as exc:
+        return False, f"HTTP {exc.code}"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+
+
+def _fmt_bytes(n: float) -> str:
+    n = float(n or 0)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if abs(n) < 1024 or unit == "TB":
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} B"
+        n /= 1024
+    return f"{n:.1f} TB"
+
+
+def _build_alert_content(kind: str, value: float, threshold: float, cfg: dict,
+                         extra: str = "") -> tuple[str, str]:
+    name = (cfg.get("machine_name") or "").strip() or _default_machine_name()
+    url = (cfg.get("preview_url") or "").strip() or "-"
+    label = "内存" if kind == "mem" else "磁盘"
+    title = f"[预警] {name} {label}使用率 {value:.1f}%"
+    now = time.strftime("%Y-%m-%d %H:%M:%S")
+    rows = [
+        ("机器名称", name),
+        ("预警事项", f"{label}使用率达到阈值"),
+        ("当前值", f"{value:.1f}%"),
+        ("触发阈值", f"{threshold:.1f}%"),
+        ("预览地址", url),
+        ("检测时间", now),
+    ]
+    if extra:
+        rows.append(("详情", extra))
+    body = "".join(
+        f"<tr><td style='padding:4px 10px;color:#666;white-space:nowrap'>{k}</td>"
+        f"<td style='padding:4px 10px'>{v}</td></tr>"
+        for k, v in rows
+    )
+    content = (
+        f"<div style='font-family:sans-serif'>"
+        f"<h3 style='margin:0 0 8px'>{title}</h3>"
+        f"<table style='border-collapse:collapse'>{body}</table>"
+        f"</div>"
+    )
+    return title, content
+
+
+def _disk_max() -> tuple[float, str]:
+    best_pct, best_desc = 0.0, ""
+    for d in _disks():
+        if d["pct"] > best_pct:
+            best_pct = float(d["pct"])
+            best_desc = f"{d['mount']} ({d['dev']}) {_fmt_bytes(d['used'])} / {_fmt_bytes(d['total'])}"
+    return best_pct, best_desc
+
+
+def _alert_loop():
+    while True:
+        cfg = _alert_load()
+        interval = max(10, int(cfg.get("check_interval_s") or 60))
+        if cfg.get("enabled") and cfg.get("pushplus_token"):
+            cooldown = max(1, int(cfg.get("cooldown_min") or 30)) * 60
+            now = time.time()
+            try:
+                mem = _mem()
+                mem_pct = float(mem.get("pct") or 0.0)
+                mem_thr = float(cfg.get("mem_threshold") or 85)
+                if mem_pct >= mem_thr and now - _alert_last["mem"] >= cooldown:
+                    extra = (f"已用 {_fmt_bytes(mem['used'])} / {_fmt_bytes(mem['total'])}"
+                             f"（RSS 合计）")
+                    title, content = _build_alert_content("mem", mem_pct, mem_thr, cfg, extra)
+                    ok, msg = _pushplus_send(cfg["pushplus_token"], title, content)
+                    if ok:
+                        _alert_last["mem"] = now
+                    print(f"[alert] mem push {'ok' if ok else 'fail: ' + msg}", flush=True)
+            except Exception as exc:
+                print(f"[alert] mem check error: {exc}", flush=True)
+            try:
+                disk_pct, disk_desc = _disk_max()
+                disk_thr = float(cfg.get("disk_threshold") or 90)
+                if disk_pct >= disk_thr and now - _alert_last["disk"] >= cooldown:
+                    title, content = _build_alert_content("disk", disk_pct, disk_thr, cfg, disk_desc)
+                    ok, msg = _pushplus_send(cfg["pushplus_token"], title, content)
+                    if ok:
+                        _alert_last["disk"] = now
+                    print(f"[alert] disk push {'ok' if ok else 'fail: ' + msg}", flush=True)
+            except Exception as exc:
+                print(f"[alert] disk check error: {exc}", flush=True)
+        time.sleep(interval)
 
 # ===== 鉴权 =====
 
@@ -596,6 +763,74 @@ def _cpu_model():
     return platform.processor() or "unknown"
 
 
+class AlertConfigBody(BaseModel):
+    enabled: bool = False
+    machine_name: str = ""
+    preview_url: str = ""
+    pushplus_token: str = ""
+    mem_threshold: float = 85
+    disk_threshold: float = 90
+    cooldown_min: int = 30
+    check_interval_s: int = 60
+
+
+def _mask_token(tok: str) -> str:
+    tok = str(tok or "")
+    if len(tok) <= 8:
+        return "*" * len(tok)
+    return tok[:4] + "*" * (len(tok) - 8) + tok[-4:]
+
+
+@app.get("/api/alert/config")
+async def alert_config_get(request: Request):
+    _auth(request)
+    cfg = _alert_load()
+    out = dict(cfg)
+    out["pushplus_token"] = _mask_token(cfg.get("pushplus_token") or "")
+    out["has_token"] = bool(cfg.get("pushplus_token"))
+    out["default_machine_name"] = _default_machine_name()
+    out["last_push"] = {"mem": _alert_last["mem"], "disk": _alert_last["disk"]}
+    return out
+
+
+@app.post("/api/alert/config")
+async def alert_config_set(body: AlertConfigBody, request: Request):
+    _auth(request)
+    cur = _alert_load()
+    incoming = body.model_dump()
+    tok = str(incoming.get("pushplus_token") or "").strip()
+    if "*" in tok or not tok:
+        incoming["pushplus_token"] = cur.get("pushplus_token") or ""
+    incoming["mem_threshold"] = min(99.0, max(1.0, float(incoming.get("mem_threshold") or 85)))
+    incoming["disk_threshold"] = min(99.0, max(1.0, float(incoming.get("disk_threshold") or 90)))
+    incoming["cooldown_min"] = min(1440, max(1, int(incoming.get("cooldown_min") or 30)))
+    incoming["check_interval_s"] = min(3600, max(10, int(incoming.get("check_interval_s") or 60)))
+    saved = _alert_save(incoming)
+    out = dict(saved)
+    out["pushplus_token"] = _mask_token(saved.get("pushplus_token") or "")
+    out["has_token"] = bool(saved.get("pushplus_token"))
+    return {"ok": True, "config": out}
+
+
+@app.post("/api/alert/test")
+async def alert_test(request: Request):
+    _auth(request)
+    cfg = _alert_load()
+    if not cfg.get("pushplus_token"):
+        raise HTTPException(400, "请先保存 pushplus token")
+    mem = _mem()
+    disk_pct, disk_desc = _disk_max()
+    detail = (f"内存 {mem['pct']:.1f}% ({_fmt_bytes(mem['used'])} / {_fmt_bytes(mem['total'])})"
+              f"；磁盘最高 {disk_pct:.1f}% {disk_desc}")
+    title, content = _build_alert_content(
+        "mem", float(mem["pct"]), float(cfg.get("mem_threshold") or 85), cfg,
+        "这是一条测试消息。" + detail)
+    ok, msg = _pushplus_send(cfg["pushplus_token"], title, content)
+    if not ok:
+        raise HTTPException(502, f"推送失败: {msg}")
+    return {"ok": True, "message": "测试消息已发送"}
+
+
 @app.get("/api/stats")
 async def stats(request: Request):
     _auth(request)
@@ -636,3 +871,4 @@ async def stats(request: Request):
 
 
 threading.Thread(target=_sample_loop, daemon=True).start()
+threading.Thread(target=_alert_loop, daemon=True).start()

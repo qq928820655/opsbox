@@ -21,11 +21,35 @@ input,select,textarea{background:var(--bg2);border:1px solid var(--bd);color:var
 input:focus,textarea:focus{border-color:var(--acc)}
 /* ---- 顶部导航 ---- */
 nav{display:flex;align-items:center;gap:6px;padding:7px 12px;border-bottom:1px solid var(--bd);background:var(--bg2)}
-nav .brand{font-weight:700;color:var(--acc);font-size:15px;margin-right:10px;white-space:nowrap}
+.brand-wrap{position:relative;display:flex;align-items:center}
+nav .brand-btn{background:transparent;border:none;color:var(--acc);font-weight:700;font-size:15px;padding:5px 8px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:5px;white-space:nowrap}
+nav .brand-btn:hover{background:var(--sel)}
+nav .brand-btn .caret{font-size:10px;color:var(--dim);transition:transform .15s}
+.brand-wrap.open .brand-btn .caret{transform:rotate(180deg)}
+.brand-menu{position:absolute;top:calc(100% + 6px);left:0;min-width:170px;background:var(--bg2);border:1px solid var(--bd);border-radius:8px;padding:5px;box-shadow:0 8px 24px rgba(0,0,0,.45);z-index:200;display:none}
+.brand-wrap.open .brand-menu{display:block}
+.brand-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;border:none;color:var(--fg);font-size:13px;padding:8px 10px;border-radius:6px}
+.brand-menu button:hover{background:var(--sel);color:var(--acc)}
+.brand-menu button.on{color:var(--acc);background:var(--sel);font-weight:600}
 nav button{border:none;background:transparent;color:var(--dim);font-size:13.5px;padding:5px 14px;border-radius:6px}
 nav button.on{background:var(--sel);color:var(--acc);font-weight:600}
-#tab-files{display:flex;flex-direction:column;flex:1;overflow:hidden}
-#tab-res{display:none;flex:1;overflow-y:auto}
+#tab-files{display:none;flex-direction:column;flex:1;overflow:hidden}
+#tab-res{display:block;flex:1;overflow-y:auto}
+#tab-alert{display:none;flex:1;overflow-y:auto}
+.alert-wrap{max-width:760px;margin:0 auto;padding:18px 16px 40px}
+.alert-card{background:var(--bg2);border:1px solid var(--bd);border-radius:10px;padding:18px 20px;margin-bottom:14px}
+.alert-card h3{font-size:14px;color:var(--acc);margin-bottom:14px}
+.field{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.field label{width:150px;color:var(--dim);font-size:13px;flex:none}
+.field input[type=text],.field input[type=password],.field input[type=number]{flex:1;min-width:0}
+.field .hint{color:var(--dim);font-size:12px}
+.switch{display:inline-flex;align-items:center;gap:8px;cursor:pointer;user-select:none}
+.switch input{width:16px;height:16px;accent-color:var(--acc)}
+.alert-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+.alert-msg{font-size:12.5px;min-height:18px;margin-top:10px}
+.alert-msg.ok{color:var(--ok)}
+.alert-msg.err{color:var(--err)}
+.alert-note{color:var(--dim);font-size:12px;line-height:1.7;margin-top:6px}
 /* ---- 文件管理 ---- */
 header{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--bd);background:var(--bg2);flex-wrap:wrap}
 #pathInput{flex:1;min-width:260px;font-family:ui-monospace,Consolas,monospace}
@@ -118,9 +142,14 @@ canvas{width:100%;height:130px;display:block}
 </div>
 
 <nav>
-  <span class="brand">🧰 运维工作台</span>
-  <button id="navFiles" class="on" onclick="switchTab('files')">📁 文件管理</button>
-  <button id="navRes" onclick="switchTab('res')">📊 资源监控</button>
+  <div class="brand-wrap" id="brandWrap">
+    <button class="brand-btn" id="brandBtn" aria-haspopup="true" aria-expanded="false">🧰 运维工作台 <span class="caret">▼</span></button>
+    <div class="brand-menu" id="brandMenu" role="menu">
+      <button id="menuAlert" role="menuitem" onclick="switchTab('alert')">🔔 预警设置</button>
+    </div>
+  </div>
+  <button id="navRes" class="on" onclick="switchTab('res')">📊 资源监控</button>
+  <button id="navFiles" onclick="switchTab('files')">📁 文件管理</button>
 </nav>
 
 <div id="tab-files">
@@ -233,6 +262,57 @@ canvas{width:100%;height:130px;display:block}
   </div>
 </div>
 
+<div id="tab-alert">
+  <div class="alert-wrap">
+    <div class="alert-card">
+      <h3>推送预警</h3>
+      <div class="field">
+        <label>启用预警</label>
+        <label class="switch"><input type="checkbox" id="alEnabled"> 开启后台检测与推送</label>
+      </div>
+      <div class="field">
+        <label>机器名称</label>
+        <input type="text" id="alMachine" placeholder="留空则使用主机名">
+      </div>
+      <div class="field">
+        <label>预览地址</label>
+        <input type="text" id="alUrl" placeholder="例如 https://8002-xxxx.monkeycode-ai.live">
+      </div>
+      <div class="field">
+        <label>PushPlus Token</label>
+        <input type="password" id="alToken" placeholder="粘贴你的 pushplus token" autocomplete="new-password">
+      </div>
+      <div class="field">
+        <label>内存 RSS 阈值</label>
+        <input type="number" id="alMem" min="1" max="99" step="1"> <span class="hint">%（按进程 RSS 合计 / 总内存）</span>
+      </div>
+      <div class="field">
+        <label>磁盘使用阈值</label>
+        <input type="number" id="alDisk" min="1" max="99" step="1"> <span class="hint">%（任一分区）</span>
+      </div>
+      <div class="field">
+        <label>推送冷却</label>
+        <input type="number" id="alCool" min="1" max="1440" step="1"> <span class="hint">分钟，同一指标冷却期内不重复推送</span>
+      </div>
+      <div class="field">
+        <label>检测间隔</label>
+        <input type="number" id="alInterval" min="10" max="3600" step="10"> <span class="hint">秒</span>
+      </div>
+      <div class="alert-actions">
+        <button class="primary" id="alSave">保存配置</button>
+        <button id="alTest">发送测试</button>
+        <button id="alReload">重新读取</button>
+      </div>
+      <div class="alert-msg" id="alMsg"></div>
+      <div class="alert-note">
+        触发条件：内存 RSS 合计占比 ≥ 内存阈值，或任一磁盘分区使用率 ≥ 磁盘阈值。<br>
+        推送内容包含机器名称、预警事项、当前值、触发阈值、预览地址与检测时间。<br>
+        配置保存在服务器 <code>alert_config.json</code>（权限 600），Token 仅回显掩码。
+      </div>
+    </div>
+  </div>
+</div>
+
 <div id="editorOverlay" class="overlay hidden">
   <div class="ed-box">
     <div class="ed-head">
@@ -275,7 +355,7 @@ let clip = null;
 let searchMode = false;
 let editPath = '', editDirty = false;
 let promptCb = null;
-let activeTab = 'files';
+let activeTab = 'res';
 let paused = false, sortBy = 'cpu', resTimer = null;
 
 function toast(msg, type='ok'){
@@ -324,16 +404,21 @@ function switchTab(t, skipHash){
   activeTab = t;
   $('tab-files').style.display = t==='files' ? 'flex' : 'none';
   $('tab-res').style.display = t==='res' ? 'block' : 'none';
+  $('tab-alert').style.display = t==='alert' ? 'block' : 'none';
   $('navFiles').classList.toggle('on', t==='files');
   $('navRes').classList.toggle('on', t==='res');
+  $('menuAlert').classList.toggle('on', t==='alert');
+  closeBrandMenu();
   if(!skipHash){
-    const h = t==='files' ? '#files' : '#res';
+    const h = t==='files' ? '#files' : (t==='alert' ? '#alert' : '#res');
     if(location.hash !== h) history.replaceState(null, '', h);
   }
   if(t==='res'){ resRefresh(); resStart(); } else resStop();
+  if(t==='alert') alertLoad();
 }
 window.addEventListener('hashchange', ()=>{
-  const t = location.hash === '#res' ? 'res' : 'files';
+  const h = location.hash;
+  const t = h === '#files' ? 'files' : (h === '#alert' ? 'alert' : 'res');
   if(t !== activeTab) switchTab(t, true);
 });
 
@@ -701,6 +786,81 @@ $('byCpu').onclick = ()=>{ sortBy='cpu'; $('byCpu').classList.add('btn-active');
 $('byMem').onclick = ()=>{ sortBy='mem'; $('byMem').classList.add('btn-active'); $('byCpu').classList.remove('btn-active'); resRefresh(); };
 window.addEventListener('resize', ()=>{ if(activeTab==='res' && !paused) resRefresh(); });
 
+/* ---- 品牌下拉菜单 ---- */
+function openBrandMenu(){
+  $('brandWrap').classList.add('open');
+  $('brandBtn').setAttribute('aria-expanded','true');
+}
+function closeBrandMenu(){
+  $('brandWrap').classList.remove('open');
+  $('brandBtn').setAttribute('aria-expanded','false');
+}
+$('brandBtn').onclick = (e)=>{
+  e.stopPropagation();
+  if($('brandWrap').classList.contains('open')) closeBrandMenu(); else openBrandMenu();
+};
+document.addEventListener('click', (e)=>{
+  if(!$('brandWrap').contains(e.target)) closeBrandMenu();
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape') closeBrandMenu();
+});
+
+/* ---- 预警设置 ---- */
+function alertMsg(text, type){
+  const el = $('alMsg');
+  el.textContent = text || '';
+  el.className = 'alert-msg' + (type ? ' ' + type : '');
+}
+function alertFill(c){
+  $('alEnabled').checked = !!c.enabled;
+  $('alMachine').value = c.machine_name || '';
+  $('alUrl').value = c.preview_url || '';
+  $('alToken').value = c.pushplus_token || '';
+  $('alMem').value = c.mem_threshold ?? 85;
+  $('alDisk').value = c.disk_threshold ?? 90;
+  $('alCool').value = c.cooldown_min ?? 30;
+  $('alInterval').value = c.check_interval_s ?? 60;
+  if(!$('alMachine').placeholder && c.default_machine_name){
+    $('alMachine').placeholder = '留空则使用主机名：' + c.default_machine_name;
+  }
+}
+async function alertLoad(){
+  if(!token){ return; }
+  try{
+    const c = await api('/api/alert/config');
+    alertFill(c);
+    alertMsg(c.has_token ? '已保存 Token（掩码显示），直接保存不会覆盖' : '尚未配置 pushplus token', '');
+  }catch(e){ alertMsg('读取配置失败: '+e.message, 'err'); }
+}
+async function alertSave(){
+  const body = {
+    enabled: $('alEnabled').checked,
+    machine_name: $('alMachine').value.trim(),
+    preview_url: $('alUrl').value.trim(),
+    pushplus_token: $('alToken').value.trim(),
+    mem_threshold: Number($('alMem').value) || 85,
+    disk_threshold: Number($('alDisk').value) || 90,
+    cooldown_min: Number($('alCool').value) || 30,
+    check_interval_s: Number($('alInterval').value) || 60,
+  };
+  try{
+    const r = await api('/api/alert/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    alertFill(r.config);
+    alertMsg('已保存', 'ok');
+  }catch(e){ alertMsg('保存失败: '+e.message, 'err'); }
+}
+async function alertTest(){
+  alertMsg('正在发送测试消息…', '');
+  try{
+    const r = await api('/api/alert/test', {method:'POST'});
+    alertMsg(r.message || '测试消息已发送', 'ok');
+  }catch(e){ alertMsg('测试失败: '+e.message, 'err'); }
+}
+$('alSave').onclick = alertSave;
+$('alTest').onclick = alertTest;
+$('alReload').onclick = alertLoad;
+
 /* ---- 登录 ---- */
 $('loginBtn').onclick = doLogin;
 $('loginPwd').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); });
@@ -713,22 +873,25 @@ async function doLogin(){
     const d = await r.json();
     token = d.token; localStorage.setItem('ops_token', token);
     $('loginOverlay').classList.add('hidden');
-    loadDir(cwd);
-    if(activeTab==='res') resStart();
+    if(activeTab==='files') loadDir(cwd);
+    else if(activeTab==='alert') alertLoad();
+    else { resRefresh(); resStart(); }
   }catch(e){ $('loginErr').textContent = e.message; }
 }
 
 /* ---- 启动：探测 token，有效则按 hash 进对应页；401 弹登录 ---- */
 (async function init(){
-  const t0 = location.hash === '#res' ? 'res' : 'files';
+  const h0 = location.hash;
+  const t0 = h0 === '#files' ? 'files' : (h0 === '#alert' ? 'alert' : 'res');
   if(t0 !== activeTab) switchTab(t0, true);
   if(!token){ showLogin(); return; }
   try{
     await api('/api/stats');
-    loadDir('/workspace');
   }catch(e){
-    if(e.message!=='未登录'){ toast('默认打开 /workspace: '+e.message,'warn'); loadDir('/'); }
+    if(e.message!=='未登录'){ toast('加载失败: '+e.message,'warn'); }
   }
+  if(activeTab==='files') loadDir('/workspace');
+  if(activeTab==='alert') alertLoad();
 })();
 </script>
 </body>

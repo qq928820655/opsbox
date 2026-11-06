@@ -2,3 +2,5 @@ __pycache__/
 server.log
 .secret
 .env
+alert_config.json
+*.bak*
