@@ -25,7 +25,7 @@ BRIDGE_BRANCH="main"
 LATENCY_BRANCH="master"
 
 OPS_PORT=8002
-BRIDGE_PORT=8787
+BRIDGE_PORT=8790
 LATENCY_PORT=8005
 WITH_BRIDGE=1
 WITH_LATENCY=1
@@ -111,7 +111,7 @@ dir_of() {
 mgmt_port() { # 组件 -> 从 .env 读端口，缺省回退
   _d=$(dir_of "$1"); _f="$_d/.env"; _key="OPS_PORT"; _def="8002"
   case "$1" in
-    bridge)  _key="AITB_PORT"; _def="8787" ;;
+    bridge)  _key="AITB_PORT"; _def="8790" ;;
     latency) _key="LAT_PORT";  _def="8005" ;;
   esac
   if [ -f "$_f" ]; then
@@ -182,8 +182,10 @@ mgmt_start_one() {
   esac
   if mgmt_wait_http "$_p"; then
     log "$_c 已启动（端口 $_p）-> http://127.0.0.1:$_p/"
+    return 0
   else
     warn "$_c 启动后无响应，请查看日志: $_d/server.log"
+    return 1
   fi
 }
 
@@ -513,14 +515,26 @@ do_install() {
     log "已按指定密码更新访问 token（含桥接同步）"
   fi
 
-  # Python 依赖：opsbox 需要 fastapi + uvicorn + psutil（缺失会导致启动失败、预览无法访问）
-  if ! python3 -c "import fastapi, uvicorn, psutil" >/dev/null 2>&1; then
-    log "安装 Python 依赖（fastapi uvicorn psutil）"
-    pip3 install fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-      || pip3 install --break-system-packages fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-      || pip3 install --user fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-      || pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-      || die "Python 依赖安装失败，请手动执行: pip3 install fastapi uvicorn psutil"
+  # Python 依赖：fastapi+uvicorn+psutil+python-multipart（缺任一都会启动失败、预览无法访问）
+  if ! python3 -c "import fastapi, uvicorn, psutil, multipart" >/dev/null 2>&1; then
+    log "安装 Python 依赖（fastapi uvicorn[standard] psutil python-multipart）"
+    _r=""
+    [ -f "$OPS_DIR/requirements.txt" ] && _r="-r $OPS_DIR/requirements.txt"
+    _pkgs="fastapi uvicorn[standard] psutil python-multipart"
+    pip3 install $_r >/dev/null 2>&1 \
+      || pip3 install --break-system-packages $_r >/dev/null 2>&1 \
+      || pip3 install --user $_r >/dev/null 2>&1 \
+      || pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple $_r >/dev/null 2>&1 \
+      || true
+    if ! python3 -c "import fastapi, uvicorn, psutil, multipart" >/dev/null 2>&1; then
+      pip3 install $_pkgs >/dev/null 2>&1 \
+        || pip3 install --break-system-packages $_pkgs >/dev/null 2>&1 \
+        || pip3 install --user $_pkgs >/dev/null 2>&1 \
+        || pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple $_pkgs >/dev/null 2>&1 \
+        || die "Python 依赖安装失败，请手动执行: pip3 install fastapi 'uvicorn[standard]' psutil python-multipart"
+    fi
+    python3 -c "import fastapi, uvicorn, psutil, multipart" >/dev/null 2>&1 \
+      || die "依赖安装后校验仍失败，请手动执行: pip3 install fastapi 'uvicorn[standard]' psutil python-multipart"
   fi
 
   if [ -f "$OPS_DIR/.env" ]; then
@@ -659,7 +673,7 @@ dir_of() {
 get_port() {
   _d=$(dir_of "$1"); _key="OPS_PORT"; _def="8002"
   case "$1" in
-    bridge)  _key="AITB_PORT"; _def="8787" ;;
+    bridge)  _key="AITB_PORT"; _def="8790" ;;
     latency) _key="LAT_PORT";  _def="8005" ;;
   esac
   _f="$_d/.env"
@@ -782,6 +796,7 @@ MEOF
 
   # ---- 启动 ----
   START_LAT=0; START_BR=0; START_OPS=0
+  LAT_FAIL=0; BR_FAIL=0; OPS_FAIL=0
   if [ "$DO_START" = 1 ]; then
     [ "$WITH_LATENCY" = 1 ] && START_LAT=1
     [ "$WITH_BRIDGE" = 1 ] && START_BR=1
@@ -797,9 +812,28 @@ MEOF
       START_OPS=1; log "opsbox 升级前在运行，更新后原样重启"
     fi
   fi
-  [ "$START_LAT" = 1 ] && mgmt_start_one latency
-  [ "$START_BR" = 1 ] && mgmt_start_one bridge
-  [ "$START_OPS" = 1 ] && mgmt_start_one opsbox
+  if [ "$START_LAT" = 1 ]; then mgmt_start_one latency || LAT_FAIL=1; fi
+  if [ "$START_BR" = 1 ]; then mgmt_start_one bridge || BR_FAIL=1; fi
+  if [ "$START_OPS" = 1 ]; then mgmt_start_one opsbox || OPS_FAIL=1; fi
+
+  # ---- 启动失败：回显日志尾部并整体失败，不打印成功汇总 ----
+  if [ "$LAT_FAIL" = 1 ] || [ "$BR_FAIL" = 1 ] || [ "$OPS_FAIL" = 1 ]; then
+    echo
+    warn "部署未完成，以下组件启动失败："
+    if [ "$LAT_FAIL" = 1 ]; then
+      echo "----- latency-test 日志尾部（$TARGET/latency-test/server.log）-----"
+      tail -n 20 "$TARGET/latency-test/server.log" 2>/dev/null || true
+    fi
+    if [ "$BR_FAIL" = 1 ]; then
+      echo "----- ai-terminal-bridge 日志尾部（$TARGET/ai-terminal-bridge/server.log）-----"
+      tail -n 20 "$TARGET/ai-terminal-bridge/server.log" 2>/dev/null || true
+    fi
+    if [ "$OPS_FAIL" = 1 ]; then
+      echo "----- opsbox 日志尾部（$TARGET/opsbox/server.log）-----"
+      tail -n 20 "$TARGET/opsbox/server.log" 2>/dev/null || true
+    fi
+    die "请按上方日志处理问题后重新执行本脚本（已有配置会保留）；手动启动: sh $TARGET/manage.sh start all"
+  fi
 
   # ---- 汇总（端口/密码以 .env 实际生效值为准） ----
   if [ -f "$OPS_DIR/.env" ]; then
@@ -851,7 +885,7 @@ change_password() {
   for _c in opsbox bridge; do
     if [ -n "$(port_pids "$(mgmt_port "$_c")")" ]; then
       mgmt_stop_one "$_c"
-      mgmt_start_one "$_c"
+      mgmt_start_one "$_c" || true
     fi
   done
 }
@@ -874,9 +908,9 @@ main_menu() {
     case "$sel" in
       1) do_install ;;
       2) change_password ;;
-      3) for _c in opsbox bridge latency; do mgmt_start_one "$_c"; done ;;
+      3) for _c in opsbox bridge latency; do mgmt_start_one "$_c" || true; done ;;
       4) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; done ;;
-      5) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
+      5) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; mgmt_start_one "$_c" || true; done ;;
       0|q|Q) exit 0 ;;
       *) warn "无效选择: $sel" ;;
     esac
