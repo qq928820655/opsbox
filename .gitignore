@@ -4,3 +4,4 @@ server.log
 .env
 alert_config.json
 *.bak*
+bridge_token.json

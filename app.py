@@ -802,11 +802,45 @@ def _public_base(request: Request, port: int, override: str) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+BRIDGE_TOKEN_FILE = os.path.join(BASE_DIR, "bridge_token.json")
+BRIDGE_TOKEN_TTL_MS = 7 * 24 * 3600 * 1000
+
+
+def _bridge_cached_token() -> str:
+    """读取缓存的跳转令牌；过期或缺失返回空串。"""
+    try:
+        with open(BRIDGE_TOKEN_FILE, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    tok = str(data.get("token") or "")
+    exp = int(data.get("expires_at") or 0)
+    if tok and exp > time.time() + 300:
+        return tok
+    return ""
+
+
+def _bridge_store_token(tok: str) -> None:
+    tmp = BRIDGE_TOKEN_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump({"token": tok, "expires_at": int(time.time() + BRIDGE_TOKEN_TTL_MS / 1000)},
+                  f, ensure_ascii=False)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, BRIDGE_TOKEN_FILE)
+
+
 def _aitb_mint_token() -> str:
-    """用统一令牌向 bridge 申请一个短时效会话令牌，避免把主令牌放进 URL。"""
+    """取得用于免登录跳转的令牌：优先复用缓存，失效时再向 bridge 申请。
+
+    令牌有效期 7 天并落盘缓存，避免每次点击都新建一个短时效令牌把
+    bridge 的令牌列表刷满。
+    """
+    cached = _bridge_cached_token()
+    if cached:
+        return cached
     payload = json.dumps({
         "name": "ops-launch",
-        "ttlMs": 10 * 60 * 1000,
+        "ttlMs": BRIDGE_TOKEN_TTL_MS,
         "scopes": ["exec", "session", "admin"],
     }).encode("utf-8")
     req = urllib.request.Request(
@@ -823,6 +857,7 @@ def _aitb_mint_token() -> str:
     tok = ((data or {}).get("token") or {}).get("token") or ""
     if not tok:
         raise RuntimeError("bridge 未返回令牌")
+    _bridge_store_token(tok)
     return tok
 
 
