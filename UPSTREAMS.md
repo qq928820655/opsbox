@@ -27,7 +27,7 @@ opsbox 依赖的 bridge 接口：
 | 接口 | 用途 |
 |---|---|
 | `POST /api/tokens` | 用统一令牌申请跳转令牌（scopes 需含 `exec`/`session`/`admin`） |
-| `POST /api/auth/login` | 前端用 `?token=` 换取会话（bridge 自带逻辑） |
+| `POST /api/auth/login` | 前端用 `?token=` 换取会话（body: `{"username":"admin","password":"<跳转令牌>"}`） |
 | `GET /api/health` | 存活探测 |
 
 opsbox 侧实现见 `app.py`：
