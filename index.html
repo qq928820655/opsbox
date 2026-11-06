@@ -31,6 +31,7 @@ nav .brand-btn .caret{font-size:10px;color:var(--dim);transition:transform .15s}
 .brand-menu button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:transparent;border:none;color:var(--fg);font-size:13px;padding:8px 10px;border-radius:6px}
 .brand-menu button:hover{background:var(--sel);color:var(--acc)}
 .brand-menu button.on{color:var(--acc);background:var(--sel);font-weight:600}
+.brand-menu .menu-sep{height:1px;background:var(--bd);margin:5px 6px}
 nav button{border:none;background:transparent;color:var(--dim);font-size:13.5px;padding:5px 14px;border-radius:6px}
 nav button.on{background:var(--sel);color:var(--acc);font-weight:600}
 #tab-files{display:none;flex-direction:column;flex:1;overflow:hidden}
@@ -146,6 +147,9 @@ canvas{width:100%;height:130px;display:block}
     <button class="brand-btn" id="brandBtn" aria-haspopup="true" aria-expanded="false">🧰 运维工作台 <span class="caret">▼</span></button>
     <div class="brand-menu" id="brandMenu" role="menu">
       <button id="menuAlert" role="menuitem" onclick="switchTab('alert')">🔔 预警设置</button>
+      <div class="menu-sep"></div>
+      <button id="menuBridge" role="menuitem" onclick="launchApp('bridge')">🖥 终端桥接</button>
+      <button id="menuLatency" role="menuitem" onclick="launchApp('latency')">📶 链路探针</button>
     </div>
   </div>
   <button id="navRes" class="on" onclick="switchTab('res')">📊 资源监控</button>
@@ -785,6 +789,18 @@ $('updBtn').onclick = ()=>{
 $('byCpu').onclick = ()=>{ sortBy='cpu'; $('byCpu').classList.add('btn-active'); $('byMem').classList.remove('btn-active'); resRefresh(); };
 $('byMem').onclick = ()=>{ sortBy='mem'; $('byMem').classList.add('btn-active'); $('byCpu').classList.remove('btn-active'); resRefresh(); };
 window.addEventListener('resize', ()=>{ if(activeTab==='res' && !paused) resRefresh(); });
+
+/* ---- 内置应用跳转（复用 ops 登录态，无需二次登录） ---- */
+async function launchApp(kind){
+  closeBrandMenu();
+  const path = kind === 'bridge' ? '/api/launch/bridge' : '/api/launch/latency';
+  try{
+    const r = await api(path);
+    window.open(r.url, '_blank', 'noopener');
+  }catch(e){
+    toast('打开失败: ' + e.message, 'err');
+  }
+}
 
 /* ---- 品牌下拉菜单 ---- */
 function openBrandMenu(){

@@ -34,6 +34,12 @@ from pydantic import BaseModel
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PASSWORD = (os.environ.get("OPS_PASSWORD") or os.environ.get("FB_PASSWORD")
             or os.environ.get("RM_PASSWORD") or "qq928820655")
+# 运维工作台内置应用（统一登录：复用 OPS_PASSWORD 作为 bridge 管理令牌）
+AITB_URL = (os.environ.get("AITB_URL") or "http://127.0.0.1:8787").rstrip("/")
+AITB_TOKEN = os.environ.get("AITB_TOKEN") or PASSWORD
+LATENCY_URL = (os.environ.get("LATENCY_URL") or "http://127.0.0.1:8005").rstrip("/")
+AITB_PUBLIC = (os.environ.get("AITB_PUBLIC") or "").rstrip("/")
+LATENCY_PUBLIC = (os.environ.get("LATENCY_PUBLIC") or "").rstrip("/")
 MAX_EDIT = 5 * 1024 * 1024
 MAX_ARCHIVES = 4 * 1024 * 1024 * 1024
 TOKEN_TTL = 7 * 24 * 3600
@@ -779,6 +785,72 @@ def _mask_token(tok: str) -> str:
     if len(tok) <= 8:
         return "*" * len(tok)
     return tok[:4] + "*" * (len(tok) - 8) + tok[-4:]
+
+
+def _public_base(request: Request, port: int, override: str) -> str:
+    """推导内置应用的公网基址。
+
+    预览环境的域名形如 `8002-<id>.monkeycode-ai.live`，端口是主机名前缀，
+    把前缀换成目标端口即可得到同域的其他预览地址；非该形态时回落到本机地址。
+    """
+    if override:
+        return override
+    host = (request.headers.get("host") or "").split(":")[0].strip()
+    prefix, sep, rest = host.partition("-")
+    if sep and rest and prefix.isdigit():
+        return f"https://{port}-{rest}"
+    return f"http://127.0.0.1:{port}"
+
+
+def _aitb_mint_token() -> str:
+    """用统一令牌向 bridge 申请一个短时效会话令牌，避免把主令牌放进 URL。"""
+    payload = json.dumps({
+        "name": "ops-launch",
+        "ttlMs": 10 * 60 * 1000,
+        "scopes": ["exec", "session", "admin"],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        f"{AITB_URL}/api/tokens",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {AITB_TOKEN}",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.loads(resp.read().decode("utf-8", "replace"))
+    tok = ((data or {}).get("token") or {}).get("token") or ""
+    if not tok:
+        raise RuntimeError("bridge 未返回令牌")
+    return tok
+
+
+@app.get("/api/launch/bridge")
+async def launch_bridge(request: Request):
+    _auth(request)
+    base = _public_base(request, 8787, AITB_PUBLIC)
+    try:
+        tok = _aitb_mint_token()
+    except Exception as exc:
+        # 申请失败时退回统一令牌，保证仍能进入（只是 URL 里会带主令牌）
+        print(f"[launch] bridge token mint failed: {exc}", flush=True)
+        tok = AITB_TOKEN
+    return {
+        "ok": True,
+        "url": f"{base}/?token={urllib.parse.quote(tok)}",
+        "name": "终端桥接",
+    }
+
+
+@app.get("/api/launch/latency")
+async def launch_latency(request: Request):
+    _auth(request)
+    return {
+        "ok": True,
+        "url": f"{_public_base(request, 8005, LATENCY_PUBLIC)}/",
+        "name": "链路探针",
+    }
 
 
 @app.get("/api/alert/config")
