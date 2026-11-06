@@ -1,19 +1,19 @@
 #!/bin/sh
 # opsbox 运维工作台一键安装/升级/管理脚本
-# 安装/升级:
-#   curl -fsSL https://raw.githubusercontent.com/qq928820655/opsbox/main/install.sh | sh
-#   交互模式询问安装项（直接回车=默认值）；管道模式(无终端)按默认值全量安装
+# 用法:
+#   交互式菜单（安装/升级、改密码、启动、停止、重启）:
+#     curl -fsSL https://raw.githubusercontent.com/qq928820655/opsbox/main/install.sh | sh
+#   管理子命令（同样支持 curl | sh -s -- <动作>）:
+#     sh install.sh status|start|stop|restart [all|ops|bridge|latency]
+#   无终端管道模式（cron/自动化）按默认值全量安装
 # 非交互参数:
 #   sh install.sh --dir /opt/opsbox --password YOUR_TOKEN --with-bridge --with-latency
 #   sh install.sh --ops-only --no-start --port 8002
 # 升级与端口冲突:
-#   目标目录已是同款应用 -> 自动走更新/升级（保留 .env 等本机文件）
+#   目标目录已是同款应用 -> 自动升级并保留 .env（密码/端口沿用已有配置）
 #   目标端口被其他应用占用 -> 交互询问：1)顺延可用端口(默认) 2)指定端口 3)停止占用者后使用
-#                            非交互默认顺延，可用 --on-conflict stop 强制释放
-# 服务管理:
-#   sh install.sh status|start|stop|restart|menu [all|ops|bridge|latency]
-#   curl -fsSL .../install.sh | sh -s -- status        （同理 start/stop/restart/menu）
-#   安装后也可直接用本机脚本: sh /opt/opsbox/manage.sh（无参数进入交互菜单）
+# 服务管理（安装后本机直用）:
+#   sh /opt/opsbox/manage.sh
 
 set -eu
 
@@ -36,13 +36,15 @@ ON_CONFLICT="next"   # next=顺延可用端口 | stop=停止占用者后使用
 INTERACTIVE=0
 ACTION=""
 SVC_WORD="all"
+EXIST_INSTALLED=0
 
 log()  { printf '\033[32m[install]\033[0m %s\n' "$*"; }
 warn() { printf '\033[33m[warn]\033[0m %s\n' "$*"; }
 die()  { printf '\033[31m[error]\033[0m %s\n' "$*" >&2; exit 1; }
 
-# ---------- 参数解析（显式参数优先于交互询问） ----------
+# ---------- 参数解析（显式参数优先于已有配置与交互询问） ----------
 SET_TARGET=0; SET_PASSWORD=0; SET_BRIDGE=0; SET_LATENCY=0; SET_START=0
+SET_PORT=0; SET_BPORT=0; SET_LPORT=0
 while [ $# -gt 0 ]; do
   case "$1" in
     status|start|stop|restart|menu)
@@ -51,10 +53,10 @@ while [ $# -gt 0 ]; do
     all|ops|opsbox|bridge|ai-terminal-bridge|latency|latency-test)
       SVC_WORD="$1"; shift ;;
     --dir)          TARGET="$2"; SET_TARGET=1; shift 2 ;;
-    --port)         OPS_PORT="$2"; shift 2 ;;
+    --port)         OPS_PORT="$2"; SET_PORT=1; shift 2 ;;
     --password)     OPS_PASSWORD="$2"; SET_PASSWORD=1; shift 2 ;;
-    --bridge-port)  BRIDGE_PORT="$2"; shift 2 ;;
-    --latency-port) LATENCY_PORT="$2"; shift 2 ;;
+    --bridge-port)  BRIDGE_PORT="$2"; SET_BPORT=1; shift 2 ;;
+    --latency-port) LATENCY_PORT="$2"; SET_LPORT=1; shift 2 ;;
     --with-bridge)  WITH_BRIDGE=1; SET_BRIDGE=1; shift ;;
     --no-bridge)    WITH_BRIDGE=0; SET_BRIDGE=1; shift ;;
     --with-latency) WITH_LATENCY=1; SET_LATENCY=1; shift ;;
@@ -63,7 +65,7 @@ while [ $# -gt 0 ]; do
     --start)        DO_START=1; SET_START=1; shift ;;
     --no-start)     DO_START=0; SET_START=1; shift ;;
     --on-conflict)  ON_CONFLICT="$2"; shift 2 ;;
-    -h|--help)      sed -n '2,16p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help)      sed -n '2,17p' "$0" 2>/dev/null || true; exit 0 ;;
     *) die "未知参数: $1" ;;
   esac
 done
@@ -72,9 +74,32 @@ case "$ON_CONFLICT" in
   *) die "--on-conflict 仅支持 next | stop" ;;
 esac
 
+# ---------- 目录定位与已有配置预读（先于一切交互） ----------
+if [ "$SET_TARGET" = 0 ]; then
+  for _p in /opt "$HOME" "$(pwd)"; do
+    if [ -f "$_p/opsbox/.env" ]; then TARGET="$_p"; break; fi
+  done
+fi
 [ -z "$TARGET" ] && { [ "$(id -u)" = 0 ] && TARGET=/opt/opsbox || TARGET="$HOME/opsbox"; }
 
-# ---------- 服务管理子命令（status/start/stop/restart，无需交互） ----------
+read_env_var() { # 文件 变量 -> 值（空串表示无）
+  [ -f "$1" ] || return 0
+  grep "^$2=" "$1" 2>/dev/null | head -1 | cut -d= -f2
+}
+
+if [ -f "$TARGET/opsbox/.env" ]; then
+  EXIST_INSTALLED=1
+  _v=$(read_env_var "$TARGET/opsbox/.env" OPS_PORT)
+  [ -n "$_v" ] && [ "$SET_PORT" = 0 ] && OPS_PORT="$_v"
+  _v=$(read_env_var "$TARGET/opsbox/.env" OPS_PASSWORD)
+  [ -n "$_v" ] && [ "$SET_PASSWORD" = 0 ] && OPS_PASSWORD="$_v"
+fi
+_v=$(read_env_var "$TARGET/ai-terminal-bridge/.env" AITB_PORT)
+[ -n "$_v" ] && [ "$SET_BPORT" = 0 ] && BRIDGE_PORT="$_v"
+_v=$(read_env_var "$TARGET/latency-test/.env" LAT_PORT)
+[ -n "$_v" ] && [ "$SET_LPORT" = 0 ] && LATENCY_PORT="$_v"
+
+# ---------- 服务管理基础函数 ----------
 dir_of() {
   case "$1" in
     opsbox)  echo "$TARGET/opsbox" ;;
@@ -187,58 +212,10 @@ mgmt_norm_svc() {
   esac
 }
 
-if [ -n "$ACTION" ]; then
-  if [ "$ACTION" = "menu" ]; then
-    while :; do
-      echo
-      echo "========== opsbox 服务管理 =========="
-      for _c in opsbox bridge latency; do mgmt_status_one "$_c"; done
-      echo "  1) 启动全部   2) 停止全部   3) 重启全部"
-      echo "  4) 启动单个   5) 停止单个   6) 重启单个"
-      echo "  0) 退出"
-      printf '请选择: '
-      if [ -t 0 ]; then
-        IFS= read -r sel
-      else
-        IFS= read -r sel 2>/dev/null </dev/tty || { warn "当前无交互终端，请直接用: sh install.sh status|start|stop|restart [all|ops|bridge|latency]"; exit 1; }
-      fi
-      case "$sel" in
-        1) for _c in opsbox bridge latency; do mgmt_start_one "$_c"; done ;;
-        2) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; done ;;
-        3) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
-        4|5|6)
-          printf '组件（opsbox/bridge/latency，回车=全部）: '
-          if [ -t 0 ]; then
-            IFS= read -r sel_c
-          else
-            IFS= read -r sel_c 2>/dev/null </dev/tty || { warn "当前无交互终端"; exit 1; }
-          fi
-          [ -z "$sel_c" ] && sel_c=all
-          case "$sel" in
-            4) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_start_one "$_c"; done ;;
-            5) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_stop_one "$_c"; done ;;
-            6) for _c in $(mgmt_norm_svc "$sel_c"); do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
-          esac
-          ;;
-        0|q|Q) exit 0 ;;
-      esac
-    done
-  fi
-  for _c in $(mgmt_norm_svc "$SVC_WORD"); do
-    case "$ACTION" in
-      status)  mgmt_status_one "$_c" ;;
-      start)   mgmt_start_one "$_c" ;;
-      stop)    mgmt_stop_one "$_c" ;;
-      restart) mgmt_stop_one "$_c"; mgmt_start_one "$_c" ;;
-    esac
-  done
-  exit 0
-fi
-
-# ---------- 交互判定（curl|sh 时 stdin 是管道，必须读 /dev/tty） ----------
+# ---------- 交互工具（curl|sh 时 stdin 是管道，读 /dev/tty） ----------
 if [ -t 0 ]; then
   INTERACTIVE=1
-elif [ -t 1 ] && (printf '' >/dev/tty) 2>/dev/null; then
+elif [ -t 1 ] && (printf '' 2>/dev/null >/dev/tty) 2>/dev/null; then
   INTERACTIVE=1
 fi
 
@@ -268,6 +245,14 @@ ask_yes() { # ask_yes 提示 默认(y/n)；0=是 1=否
   esac
 }
 
+menu_read() { # menu_read 变量名（仅终端可用）
+  if [ -t 0 ]; then
+    IFS= read -r "$1"
+  else
+    IFS= read -r "$1" 2>/dev/null </dev/tty || { warn "当前无交互终端"; exit 1; }
+  fi
+}
+
 gen_password() {
   if command -v openssl >/dev/null 2>&1; then
     openssl rand -hex 12
@@ -276,33 +261,7 @@ gen_password() {
   fi
 }
 
-if [ "$INTERACTIVE" = 1 ]; then
-  log "opsbox 运维工作台一键安装/升级（文件管理 + 资源监控）；所有问题直接回车即用默认值"
-  if [ "$SET_TARGET" = 0 ]; then
-    _def_dir="/opt/opsbox"; [ "$(id -u)" != 0 ] && _def_dir="$HOME/opsbox"
-    TARGET=$(ask "安装目录" "$_def_dir")
-  fi
-  if [ "$SET_PASSWORD" = 0 ]; then
-    OPS_PASSWORD=$(ask "访问密码/令牌（opsbox 与桥接共用，即关联 token）" "$(gen_password)")
-  fi
-  if [ "$SET_BRIDGE" = 0 ]; then
-    ask_yes "是否安装终端桥接 ai-terminal-bridge（端口 $BRIDGE_PORT，Web 终端）并自动关联？" "y" && WITH_BRIDGE=1 || WITH_BRIDGE=0
-  fi
-  if [ "$SET_LATENCY" = 0 ]; then
-    ask_yes "是否安装链路探针 latency-test（端口 $LATENCY_PORT）？" "y" && WITH_LATENCY=1 || WITH_LATENCY=0
-  fi
-  if [ "$SET_START" = 0 ]; then
-    ask_yes "安装完成后立即启动服务？" "y" && DO_START=1 || DO_START=0
-  fi
-fi
-
-[ -z "$OPS_PASSWORD" ] && OPS_PASSWORD=$(gen_password)
-
-# ---------- 基础依赖 ----------
-command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || die "需要 curl 或 wget"
-command -v python3 >/dev/null 2>&1 || die "需要 python3"
-command -v tar >/dev/null 2>&1 || die "需要 tar"
-
+# ---------- 通用工具 ----------
 fetch() {
   if command -v curl >/dev/null 2>&1; then
     curl -fsSL "$1" -o "$2"
@@ -326,6 +285,14 @@ fetch_extract() { # fetch_extract 仓库 分支 目标目录 显示分支名（�
     rm -rf "$_dest"
   fi
   mv "$_dest.new" "$_dest"
+}
+
+rewrite_env_var() { # rewrite_env_var 文件 变量 值（安全替换，不支持多行值）
+  _f="$1"; _k="$2"; _v="$3"
+  [ -f "$_f" ] || return 0
+  { grep -v "^$_k=" "$_f" 2>/dev/null || true; echo "$_k=$_v"; } > "$_f.t.$$"
+  mv "$_f.t.$$" "$_f"
+  chmod 600 "$_f" 2>/dev/null || true
 }
 
 # ---------- 应用身份识别 ----------
@@ -378,7 +345,7 @@ stop_port_pids() { # 停掉占用端口的进程（TERM -> KILL）
   fi
 }
 
-stop_app() { # stop_app 类型 目录 端口（按端口精确停止；stop.sh 读不到 .env 会误杀默认端口，弃用）
+stop_app() { # stop_app 类型 目录 端口（按端口精确停止）
   stop_port_pids "$3"
 }
 
@@ -394,7 +361,6 @@ resolve_port() { # resolve_port 应用类型 期望端口 目标目录
   fi
   for _p in $_pids; do
     if [ "$(pid_cwd "$_p")" = "$_dir" ]; then
-      # 同目录同应用：升级场景，直接视为占用（由调用方停止后原地升级）
       PORT_CLASS="self"; CONFLICT_PORT="$_want"
       CONFLICT_WHO="本目录实例（PID=$(echo "$_pids" | awk '{print $1}')）"
       return 0
@@ -414,7 +380,6 @@ resolve_port() { # resolve_port 应用类型 期望端口 目标目录
   fi
   CONFLICT_PORT="$_want"
 
-  # ---- 冲突处理 ----
   if [ "$INTERACTIVE" = 1 ]; then
     {
       echo
@@ -461,8 +426,7 @@ resolve_port() { # resolve_port 应用类型 期望端口 目标目录
 }
 
 # ---------- 安装/升级判定 ----------
-# 结果写入全局: APP_MODE(install|upgrade)
-plan_install() { # plan_install 应用类型 目录
+plan_install() { # plan_install 应用类型 目录 -> 全局 APP_MODE(install|upgrade)
   APP_MODE="install"
   _kind="$1"; _dir="$2"
   if [ -d "$_dir" ]; then
@@ -477,60 +441,92 @@ plan_install() { # plan_install 应用类型 目录
   return 0
 }
 
-mkdir -p "$TARGET"
-OPS_WAS=0; BR_WAS=0; LAT_WAS=0
-
-# ---------- opsbox：安装或升级 ----------
-OPS_DIR="$TARGET/opsbox"
-plan_install opsbox "$OPS_DIR"
-OPS_MODE="$APP_MODE"
-if [ "$APP_MODE" = "upgrade" ]; then
-  log "检测到 $OPS_DIR 已是 opsbox，执行更新/升级（保留 .env 等本机配置）"
-  if [ -f "$OPS_DIR/.env" ]; then
-    _env_port=$(grep '^OPS_PORT=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
-    if [ -n "$_env_port" ]; then
-      OPS_PORT="$_env_port"
-      log "沿用已有配置端口 $OPS_PORT"
+# ---------- 安装/升级主流程 ----------
+do_install() {
+  # ---- 交互询问（已有配置直接回车全部保留） ----
+  if [ "$INTERACTIVE" = 1 ]; then
+    log "开始安装/升级（已有配置直接回车即全部保留）"
+    if [ "$SET_TARGET" = 0 ]; then
+      TARGET=$(ask "安装目录" "$TARGET")
     fi
-    _env_pw=$(grep '^OPS_PASSWORD=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
-    if [ -n "$_env_pw" ]; then
-      OPS_PASSWORD="$_env_pw"
-      log "沿用已有访问密码/token"
+    if [ "$EXIST_INSTALLED" = 1 ]; then
+      log "检测到已有安装：沿用当前密码/token（如需修改稍后用菜单[2]或 --password）"
+    elif [ "$SET_PASSWORD" = 0 ]; then
+      OPS_PASSWORD=$(ask "访问密码/令牌（opsbox 与桥接共用，即关联 token）" "$(gen_password)")
+    fi
+    if [ "$SET_BRIDGE" = 0 ]; then
+      ask_yes "是否安装终端桥接 ai-terminal-bridge（端口 $BRIDGE_PORT，Web 终端）并自动关联？" "y" && WITH_BRIDGE=1 || WITH_BRIDGE=0
+    fi
+    if [ "$SET_LATENCY" = 0 ]; then
+      ask_yes "是否安装链路探针 latency-test（端口 $LATENCY_PORT）？" "y" && WITH_LATENCY=1 || WITH_LATENCY=0
+    fi
+    if [ "$SET_START" = 0 ]; then
+      ask_yes "安装完成后立即启动服务？" "y" && DO_START=1 || DO_START=0
     fi
   fi
-fi
-resolve_port opsbox "$OPS_PORT" "$OPS_DIR"
-OPS_PORT="$RESOLVED_PORT"
-if [ "$PORT_CLASS" = "self" ]; then
-  OPS_WAS=1
-  log "opsbox 正在运行（端口 $CONFLICT_PORT），升级前先停止"
-  stop_app opsbox "$OPS_DIR" "$CONFLICT_PORT"
-elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
-  log "端口 $CONFLICT_PORT 由另一目录的 opsbox 保留运行，本次安装使用端口 $OPS_PORT"
-fi
 
-log "安装 opsbox -> $OPS_DIR"
-fetch_extract "$REPO_OPS" "$BRANCH_OPS" "$OPS_DIR" "$BRANCH_OPS"
-chmod +x "$OPS_DIR"/start.sh "$OPS_DIR"/stop.sh 2>/dev/null || true
-if [ -f "$OPS_DIR/.env" ]; then
-  sed -i "s/^OPS_PORT=.*/OPS_PORT=$OPS_PORT/" "$OPS_DIR/.env" 2>/dev/null || true
-fi
+  [ -z "$OPS_PASSWORD" ] && OPS_PASSWORD=$(gen_password)
+  command -v python3 >/dev/null 2>&1 || die "需要 python3"
+  command -v tar >/dev/null 2>&1 || die "需要 tar"
+  mkdir -p "$TARGET"
+  OPS_WAS=0; BR_WAS=0; LAT_WAS=0
 
-# Python 依赖：opsbox 需要 fastapi + uvicorn + psutil（缺失会导致启动失败、预览无法访问）
-if ! python3 -c "import fastapi, uvicorn, psutil" >/dev/null 2>&1; then
-  log "安装 Python 依赖（fastapi uvicorn psutil）"
-  pip3 install fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-    || pip3 install --break-system-packages fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-    || pip3 install --user fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-    || pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
-    || die "Python 依赖安装失败，请手动执行: pip3 install fastapi uvicorn psutil"
-fi
+  # ---- opsbox ----
+  OPS_DIR="$TARGET/opsbox"
+  plan_install opsbox "$OPS_DIR"
+  OPS_MODE="$APP_MODE"
+  if [ "$APP_MODE" = "upgrade" ]; then
+    log "检测到 $OPS_DIR 已是 opsbox，执行更新/升级（保留 .env 等本机配置）"
+    if [ -f "$OPS_DIR/.env" ]; then
+      _env_port=$(grep '^OPS_PORT=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
+      if [ -n "$_env_port" ] && [ "$SET_PORT" = 0 ]; then
+        OPS_PORT="$_env_port"
+        log "沿用已有配置端口 $OPS_PORT"
+      fi
+      _env_pw=$(grep '^OPS_PASSWORD=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
+      if [ -n "$_env_pw" ] && [ "$SET_PASSWORD" = 0 ]; then
+        OPS_PASSWORD="$_env_pw"
+        log "沿用已有访问密码/token"
+      fi
+    fi
+  fi
+  resolve_port opsbox "$OPS_PORT" "$OPS_DIR"
+  OPS_PORT="$RESOLVED_PORT"
+  if [ "$PORT_CLASS" = "self" ]; then
+    OPS_WAS=1
+    log "opsbox 正在运行（端口 $CONFLICT_PORT），升级前先停止"
+    stop_app opsbox "$OPS_DIR" "$CONFLICT_PORT"
+  elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
+    log "端口 $CONFLICT_PORT 由另一目录的 opsbox 保留运行，本次安装使用端口 $OPS_PORT"
+  fi
 
-# opsbox .env（首次安装写入；升级保留并同步关联地址）
-if [ -f "$OPS_DIR/.env" ]; then
-  log "保留已有 opsbox/.env"
-else
-  cat > "$OPS_DIR/.env" <<EOF
+  log "安装 opsbox -> $OPS_DIR"
+  fetch_extract "$REPO_OPS" "$BRANCH_OPS" "$OPS_DIR" "$BRANCH_OPS"
+  chmod +x "$OPS_DIR"/start.sh "$OPS_DIR"/stop.sh 2>/dev/null || true
+  if [ -f "$OPS_DIR/.env" ]; then
+    sed -i "s/^OPS_PORT=.*/OPS_PORT=$OPS_PORT/" "$OPS_DIR/.env" 2>/dev/null || true
+  fi
+  if [ "$SET_PASSWORD" = 1 ] && [ -f "$OPS_DIR/.env" ]; then
+    rewrite_env_var "$OPS_DIR/.env" OPS_PASSWORD "$OPS_PASSWORD"
+    rewrite_env_var "$OPS_DIR/.env" AITB_TOKEN "$OPS_PASSWORD"
+    rewrite_env_var "$TARGET/ai-terminal-bridge/.env" AITB_TOKEN "$OPS_PASSWORD"
+    log "已按指定密码更新访问 token（含桥接同步）"
+  fi
+
+  # Python 依赖：opsbox 需要 fastapi + uvicorn + psutil（缺失会导致启动失败、预览无法访问）
+  if ! python3 -c "import fastapi, uvicorn, psutil" >/dev/null 2>&1; then
+    log "安装 Python 依赖（fastapi uvicorn psutil）"
+    pip3 install fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
+      || pip3 install --break-system-packages fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
+      || pip3 install --user fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
+      || pip3 install -i https://pypi.tuna.tsinghua.edu.cn/simple fastapi "uvicorn[standard]" psutil >/dev/null 2>&1 \
+      || die "Python 依赖安装失败，请手动执行: pip3 install fastapi uvicorn psutil"
+  fi
+
+  if [ -f "$OPS_DIR/.env" ]; then
+    log "保留已有 opsbox/.env"
+  else
+    cat > "$OPS_DIR/.env" <<EOF
 OPS_PORT=$OPS_PORT
 OPS_PASSWORD=$OPS_PASSWORD
 
@@ -543,100 +539,106 @@ AITB_PUBLIC=
 LATENCY_URL=http://127.0.0.1:$LATENCY_PORT
 LATENCY_PUBLIC=
 EOF
-  chmod 600 "$OPS_DIR/.env"
-fi
+    chmod 600 "$OPS_DIR/.env"
+  fi
 
-# ---------- ai-terminal-bridge：安装或升级 ----------
-if [ "$WITH_BRIDGE" = 1 ]; then
-  BRIDGE_DIR="$TARGET/ai-terminal-bridge"
-  plan_install bridge "$BRIDGE_DIR"
-  if [ "$APP_MODE" = "upgrade" ]; then
-    log "检测到 $BRIDGE_DIR 已是 ai-terminal-bridge，执行更新/升级"
-    if [ -f "$BRIDGE_DIR/.env" ]; then
-      _env_port=$(grep '^AITB_PORT=' "$BRIDGE_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
-      [ -n "$_env_port" ] && BRIDGE_PORT="$_env_port" && log "沿用已有桥接端口 $BRIDGE_PORT"
+  # ---- ai-terminal-bridge ----
+  if [ "$WITH_BRIDGE" = 1 ]; then
+    BRIDGE_DIR="$TARGET/ai-terminal-bridge"
+    plan_install bridge "$BRIDGE_DIR"
+    if [ "$APP_MODE" = "upgrade" ]; then
+      log "检测到 $BRIDGE_DIR 已是 ai-terminal-bridge，执行更新/升级"
+      if [ -f "$BRIDGE_DIR/.env" ]; then
+        _env_port=$(grep '^AITB_PORT=' "$BRIDGE_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
+        if [ -n "$_env_port" ] && [ "$SET_BPORT" = 0 ]; then
+          BRIDGE_PORT="$_env_port"
+          log "沿用已有桥接端口 $BRIDGE_PORT"
+        fi
+      fi
     fi
-  fi
-  resolve_port bridge "$BRIDGE_PORT" "$BRIDGE_DIR"
-  BRIDGE_PORT="$RESOLVED_PORT"
-  if [ "$PORT_CLASS" = "self" ]; then
-    BR_WAS=1
-    log "桥接正在运行（端口 $CONFLICT_PORT），升级前先停止"
-    stop_port_pids "$CONFLICT_PORT"
-  elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
-    log "端口 $CONFLICT_PORT 由另一目录的 ai-terminal-bridge 保留运行，本次安装使用端口 $BRIDGE_PORT"
-  fi
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    warn "未检测到 node/npm，尝试通过系统包管理器安装"
-    if command -v apt-get >/dev/null 2>&1; then
-      DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm >/dev/null 2>&1 || true
-    elif command -v dnf >/dev/null 2>&1; then
-      dnf install -y nodejs npm >/dev/null 2>&1 || true
-    elif command -v yum >/dev/null 2>&1; then
-      yum install -y nodejs npm >/dev/null 2>&1 || true
+    resolve_port bridge "$BRIDGE_PORT" "$BRIDGE_DIR"
+    BRIDGE_PORT="$RESOLVED_PORT"
+    if [ "$PORT_CLASS" = "self" ]; then
+      BR_WAS=1
+      log "桥接正在运行（端口 $CONFLICT_PORT），升级前先停止"
+      stop_port_pids "$CONFLICT_PORT"
+    elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
+      log "端口 $CONFLICT_PORT 由另一目录的 ai-terminal-bridge 保留运行，本次安装使用端口 $BRIDGE_PORT"
     fi
-  fi
-  if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
-    log "安装 ai-terminal-bridge -> $BRIDGE_DIR"
-    fetch_extract "$REPO_BRIDGE" "$BRIDGE_BRANCH" "$BRIDGE_DIR" "$BRIDGE_BRANCH"
-    ( cd "$BRIDGE_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 ) \
-      || warn "npm install 失败，请手动在 $BRIDGE_DIR 执行 npm install"
-    if [ ! -f "$BRIDGE_DIR/.env" ]; then
-      cat > "$BRIDGE_DIR/.env" <<EOF
+    if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+      warn "未检测到 node/npm，尝试通过系统包管理器安装"
+      if command -v apt-get >/dev/null 2>&1; then
+        DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs npm >/dev/null 2>&1 || true
+      elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y nodejs npm >/dev/null 2>&1 || true
+      elif command -v yum >/dev/null 2>&1; then
+        yum install -y nodejs npm >/dev/null 2>&1 || true
+      fi
+    fi
+    if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
+      log "安装 ai-terminal-bridge -> $BRIDGE_DIR"
+      fetch_extract "$REPO_BRIDGE" "$BRIDGE_BRANCH" "$BRIDGE_DIR" "$BRIDGE_BRANCH"
+      ( cd "$BRIDGE_DIR" && npm install --no-audit --no-fund >/dev/null 2>&1 ) \
+        || warn "npm install 失败，请手动在 $BRIDGE_DIR 执行 npm install"
+      if [ ! -f "$BRIDGE_DIR/.env" ]; then
+        cat > "$BRIDGE_DIR/.env" <<EOF
 AITB_HOST=0.0.0.0
 AITB_PORT=$BRIDGE_PORT
 AITB_TOKEN=$OPS_PASSWORD
 AITB_CWD=$TARGET
 AITB_CORS=*
 EOF
-      chmod 600 "$BRIDGE_DIR/.env"
+        chmod 600 "$BRIDGE_DIR/.env"
+      fi
+      if [ -f "$BRIDGE_DIR/.env" ]; then
+        sed -i "s/^AITB_PORT=.*/AITB_PORT=$BRIDGE_PORT/" "$BRIDGE_DIR/.env" 2>/dev/null || true
+        rewrite_env_var "$BRIDGE_DIR/.env" AITB_TOKEN "$OPS_PASSWORD"
+      fi
+      if [ -f "$OPS_DIR/.env" ]; then
+        sed -i "s|^AITB_URL=.*|AITB_URL=http://127.0.0.1:$BRIDGE_PORT|" "$OPS_DIR/.env" 2>/dev/null || true
+      fi
+    else
+      warn "node/npm 不可用，跳过终端桥接（opsbox 菜单中该入口将不可用）"
+      WITH_BRIDGE=0
     fi
-    if [ -f "$BRIDGE_DIR/.env" ] && [ "$BRIDGE_PORT" != "8787" ]; then
-      sed -i "s/^AITB_PORT=.*/AITB_PORT=$BRIDGE_PORT/" "$BRIDGE_DIR/.env" 2>/dev/null || true
+  fi
+
+  # ---- latency-test ----
+  if [ "$WITH_LATENCY" = 1 ]; then
+    LATENCY_DIR="$TARGET/latency-test"
+    plan_install latency "$LATENCY_DIR"
+    if [ "$APP_MODE" = "upgrade" ]; then
+      log "检测到 $LATENCY_DIR 已是 latency-test，执行更新/升级"
+      if [ -f "$LATENCY_DIR/.env" ]; then
+        _env_port=$(grep '^LAT_PORT=' "$LATENCY_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
+        if [ -n "$_env_port" ] && [ "$SET_LPORT" = 0 ]; then
+          LATENCY_PORT="$_env_port"
+          log "沿用已有探针端口 $LATENCY_PORT"
+        fi
+      fi
     fi
-    # 同步 opsbox 关联地址，保证重复安装/端口变更后跳转不失效
+    resolve_port latency "$LATENCY_PORT" "$LATENCY_DIR"
+    LATENCY_PORT="$RESOLVED_PORT"
+    if [ "$PORT_CLASS" = "self" ]; then
+      LAT_WAS=1
+      log "latency-test 正在运行（端口 $CONFLICT_PORT），升级前先停止"
+      stop_app latency "$LATENCY_DIR" "$CONFLICT_PORT"
+    elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
+      log "端口 $CONFLICT_PORT 由另一目录的 latency-test 保留运行，本次安装使用端口 $LATENCY_PORT"
+    fi
+    log "安装 latency-test -> $LATENCY_DIR"
+    fetch_extract "$REPO_LATENCY" "$LATENCY_BRANCH" "$LATENCY_DIR" "$LATENCY_BRANCH"
+    chmod +x "$LATENCY_DIR"/start.sh "$LATENCY_DIR"/stop.sh 2>/dev/null || true
+    if [ ! -f "$LATENCY_DIR/.env" ]; then
+      echo "LAT_PORT=$LATENCY_PORT" > "$LATENCY_DIR/.env"
+    fi
     if [ -f "$OPS_DIR/.env" ]; then
-      sed -i "s|^AITB_URL=.*|AITB_URL=http://127.0.0.1:$BRIDGE_PORT|" "$OPS_DIR/.env" 2>/dev/null || true
-    fi
-  else
-    warn "node/npm 不可用，跳过终端桥接（opsbox 菜单中该入口将不可用）"
-    WITH_BRIDGE=0
-  fi
-fi
-
-# ---------- latency-test：安装或升级 ----------
-if [ "$WITH_LATENCY" = 1 ]; then
-  LATENCY_DIR="$TARGET/latency-test"
-  plan_install latency "$LATENCY_DIR"
-  if [ "$APP_MODE" = "upgrade" ]; then
-    log "检测到 $LATENCY_DIR 已是 latency-test，执行更新/升级"
-    if [ -f "$LATENCY_DIR/.env" ]; then
-      _env_port=$(grep '^LAT_PORT=' "$LATENCY_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2)
-      [ -n "$_env_port" ] && LATENCY_PORT="$_env_port" && log "沿用已有探针端口 $LATENCY_PORT"
+      sed -i "s|^LATENCY_URL=.*|LATENCY_URL=http://127.0.0.1:$LATENCY_PORT|" "$OPS_DIR/.env" 2>/dev/null || true
     fi
   fi
-  resolve_port latency "$LATENCY_PORT" "$LATENCY_DIR"
-  LATENCY_PORT="$RESOLVED_PORT"
-  if [ "$PORT_CLASS" = "self" ]; then
-    LAT_WAS=1
-    log "latency-test 正在运行（端口 $CONFLICT_PORT），升级前先停止"
-    stop_app latency "$LATENCY_DIR" "$CONFLICT_PORT"
-  elif [ "$PORT_CLASS" = "sameapp" ] && [ "$STOPPED_OLD" = 0 ]; then
-    log "端口 $CONFLICT_PORT 由另一目录的 latency-test 保留运行，本次安装使用端口 $LATENCY_PORT"
-  fi
-  log "安装 latency-test -> $LATENCY_DIR"
-  fetch_extract "$REPO_LATENCY" "$LATENCY_BRANCH" "$LATENCY_DIR" "$LATENCY_BRANCH"
-  chmod +x "$LATENCY_DIR"/start.sh "$LATENCY_DIR"/stop.sh 2>/dev/null || true
-  if [ ! -f "$LATENCY_DIR/.env" ]; then
-    echo "LAT_PORT=$LATENCY_PORT" > "$LATENCY_DIR/.env"
-  fi
-  if [ -f "$OPS_DIR/.env" ]; then
-    sed -i "s|^LATENCY_URL=.*|LATENCY_URL=http://127.0.0.1:$LATENCY_PORT|" "$OPS_DIR/.env" 2>/dev/null || true
-  fi
-fi
 
-# ---------- 生成本机管理脚本 manage.sh ----------
-cat > "$TARGET/manage.sh" <<'MEOF'
+  # ---- 生成本机管理脚本 manage.sh ----
+  cat > "$TARGET/manage.sh" <<'MEOF'
 #!/bin/sh
 # opsbox 全家桶服务管理
 # 用法: sh manage.sh <status|start|stop|restart> [all|ops|bridge|latency]
@@ -776,89 +778,130 @@ case "${1:-}" in
   *) die "未知命令: $1" ;;
 esac
 MEOF
-chmod +x "$TARGET/manage.sh"
+  chmod +x "$TARGET/manage.sh"
 
-# ---------- 启动（升级前在运行的组件自动重启） ----------
-START_LAT=0; START_BR=0; START_OPS=0
-if [ "$DO_START" = 1 ]; then
-  [ "$WITH_LATENCY" = 1 ] && START_LAT=1
-  [ "$WITH_BRIDGE" = 1 ] && START_BR=1
-  START_OPS=1
+  # ---- 启动 ----
+  START_LAT=0; START_BR=0; START_OPS=0
+  if [ "$DO_START" = 1 ]; then
+    [ "$WITH_LATENCY" = 1 ] && START_LAT=1
+    [ "$WITH_BRIDGE" = 1 ] && START_BR=1
+    START_OPS=1
+  else
+    if [ "$WITH_LATENCY" = 1 ] && [ "$LAT_WAS" = 1 ]; then
+      START_LAT=1; log "latency-test 升级前在运行，更新后原样重启"
+    fi
+    if [ "$WITH_BRIDGE" = 1 ] && [ "$BR_WAS" = 1 ]; then
+      START_BR=1; log "ai-terminal-bridge 升级前在运行，更新后原样重启"
+    fi
+    if [ "$OPS_WAS" = 1 ]; then
+      START_OPS=1; log "opsbox 升级前在运行，更新后原样重启"
+    fi
+  fi
+  [ "$START_LAT" = 1 ] && mgmt_start_one latency
+  [ "$START_BR" = 1 ] && mgmt_start_one bridge
+  [ "$START_OPS" = 1 ] && mgmt_start_one opsbox
+
+  # ---- 汇总（端口/密码以 .env 实际生效值为准） ----
+  if [ -f "$OPS_DIR/.env" ]; then
+    _v=$(grep '^OPS_PORT=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2);     [ -n "$_v" ] && OPS_PORT="$_v"
+    _v=$(grep '^OPS_PASSWORD=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && OPS_PASSWORD="$_v"
+  fi
+  if [ -f "$TARGET/ai-terminal-bridge/.env" ]; then
+    _v=$(grep '^AITB_PORT=' "$TARGET/ai-terminal-bridge/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && BRIDGE_PORT="$_v"
+  fi
+  if [ -f "$TARGET/latency-test/.env" ]; then
+    _v=$(grep '^LAT_PORT=' "$TARGET/latency-test/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && LATENCY_PORT="$_v"
+  fi
+  MAIN_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
+  [ -z "$MAIN_IP" ] && MAIN_IP=127.0.0.1
+  echo
+  log "完成！"
+  if [ "$OPS_MODE" = "upgrade" ]; then
+    echo "  模式     : 更新/升级（本机配置已保留）"
+  else
+    echo "  模式     : 全新安装"
+  fi
+  echo "  opsbox   : http://$MAIN_IP:$OPS_PORT/   密码/token: $OPS_PASSWORD"
+  if [ -d "$TARGET/ai-terminal-bridge" ]; then
+    echo "  终端桥接 : http://127.0.0.1:$BRIDGE_PORT/  （已关联，opsbox 下拉菜单免登录跳转）"
+  fi
+  if [ -d "$TARGET/latency-test" ]; then
+    echo "  链路探针 : http://127.0.0.1:$LATENCY_PORT/"
+  fi
+  echo "  目录     : $TARGET"
+  echo "  配置     : $TARGET/opsbox/.env（改密码后重启服务生效）"
+  echo "  服务管理 : sh $TARGET/manage.sh        （交互菜单：状态/启动/停止/重启）"
+  echo "  平台预览 : 服务已监听端口 $OPS_PORT（MonkeyCode 等平台会自动生成 <端口>- 前缀的预览地址）"
+  echo
+  log "登录 opsbox 后，通过右上角下拉菜单直达已安装的上游应用。"
+}
+
+# ---------- 修改密码 ----------
+change_password() {
+  _new=""
+  if [ "$INTERACTIVE" = 1 ]; then
+    _new=$(ask "输入新的访问密码/token" "")
+  fi
+  [ -z "$_new" ] && { log "已取消（保持原密码）"; return 0; }
+  OPS_PASSWORD="$_new"
+  rewrite_env_var "$TARGET/opsbox/.env" OPS_PASSWORD "$_new"
+  rewrite_env_var "$TARGET/opsbox/.env" AITB_TOKEN "$_new"
+  rewrite_env_var "$TARGET/ai-terminal-bridge/.env" AITB_TOKEN "$_new"
+  log "密码/token 已更新（opsbox 与桥接配置已同步）"
+  for _c in opsbox bridge; do
+    if [ -n "$(port_pids "$(mgmt_port "$_c")")" ]; then
+      mgmt_stop_one "$_c"
+      mgmt_start_one "$_c"
+    fi
+  done
+}
+
+# ---------- 交互式主菜单 ----------
+main_menu() {
+  while :; do
+    echo
+    echo "============ opsbox 运维全家桶 ============"
+    if [ "$EXIST_INSTALLED" = 1 ]; then
+      echo "  检测到已有安装: $TARGET（配置已自动读取）"
+    fi
+    for _c in opsbox bridge latency; do mgmt_status_one "$_c"; done
+    echo "  1) 安装 / 升级（保留已有配置）"
+    echo "  2) 修改访问密码/token"
+    echo "  3) 启动全部    4) 停止全部    5) 重启全部"
+    echo "  0) 退出"
+    printf '请选择: '
+    menu_read sel
+    case "$sel" in
+      1) do_install ;;
+      2) change_password ;;
+      3) for _c in opsbox bridge latency; do mgmt_start_one "$_c"; done ;;
+      4) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; done ;;
+      5) for _c in opsbox bridge latency; do mgmt_stop_one "$_c"; mgmt_start_one "$_c"; done ;;
+      0|q|Q) exit 0 ;;
+      *) warn "无效选择: $sel" ;;
+    esac
+  done
+}
+
+# ---------- 入口 ----------
+if [ -n "$ACTION" ]; then
+  if [ "$ACTION" = "menu" ]; then
+    main_menu
+    exit 0
+  fi
+  for _c in $(mgmt_norm_svc "$SVC_WORD"); do
+    case "$ACTION" in
+      status)  mgmt_status_one "$_c" ;;
+      start)   mgmt_start_one "$_c" ;;
+      stop)    mgmt_stop_one "$_c" ;;
+      restart) mgmt_stop_one "$_c"; mgmt_start_one "$_c" ;;
+    esac
+  done
+  exit 0
+fi
+
+if [ "$INTERACTIVE" = 1 ]; then
+  main_menu
 else
-  if [ "$WITH_LATENCY" = 1 ] && [ "$LAT_WAS" = 1 ]; then
-    START_LAT=1; log "latency-test 升级前在运行，更新后原样重启"
-  fi
-  if [ "$WITH_BRIDGE" = 1 ] && [ "$BR_WAS" = 1 ]; then
-    START_BR=1; log "ai-terminal-bridge 升级前在运行，更新后原样重启"
-  fi
-  if [ "$OPS_WAS" = 1 ]; then
-    START_OPS=1; log "opsbox 升级前在运行，更新后原样重启"
-  fi
+  do_install
 fi
-if [ "$START_LAT" = 1 ]; then
-  ( cd "$TARGET/latency-test" && LAT_PORT="$LATENCY_PORT" sh start.sh >/dev/null 2>&1 ) || true
-fi
-if [ "$START_BR" = 1 ]; then
-  ( cd "$TARGET/ai-terminal-bridge" && AITB_PORT="$BRIDGE_PORT" setsid nohup npm start > server.log 2>&1 & ) || true
-fi
-if [ "$START_OPS" = 1 ]; then
-  ( cd "$TARGET/opsbox" && OPS_PORT="$OPS_PORT" sh start.sh >/dev/null 2>&1 ) || true
-fi
-
-# ---------- 启动验证（保证端口真正监听，预览才能访问） ----------
-if [ "$START_LAT" = 1 ]; then
-  if mgmt_wait_http "$LATENCY_PORT"; then
-    log "latency-test 就绪: http://127.0.0.1:$LATENCY_PORT/"
-  else
-    warn "latency-test 启动后无响应，日志: $TARGET/latency-test/server.log"
-  fi
-fi
-if [ "$START_BR" = 1 ]; then
-  if mgmt_wait_http "$BRIDGE_PORT"; then
-    log "ai-terminal-bridge 就绪: http://127.0.0.1:$BRIDGE_PORT/"
-  else
-    warn "ai-terminal-bridge 启动后无响应，日志: $TARGET/ai-terminal-bridge/server.log"
-  fi
-fi
-if [ "$START_OPS" = 1 ]; then
-  if mgmt_wait_http "$OPS_PORT"; then
-    log "opsbox 就绪: http://127.0.0.1:$OPS_PORT/"
-  else
-    warn "opsbox 启动后无响应，日志: $TARGET/opsbox/server.log"
-  fi
-fi
-
-# ---------- 汇总（端口/密码均以 .env 实际生效值为准） ----------
-if [ -f "$OPS_DIR/.env" ]; then
-  _v=$(grep '^OPS_PORT=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2);     [ -n "$_v" ] && OPS_PORT="$_v"
-  _v=$(grep '^OPS_PASSWORD=' "$OPS_DIR/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && OPS_PASSWORD="$_v"
-fi
-if [ -f "$TARGET/ai-terminal-bridge/.env" ]; then
-  _v=$(grep '^AITB_PORT=' "$TARGET/ai-terminal-bridge/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && BRIDGE_PORT="$_v"
-fi
-if [ -f "$TARGET/latency-test/.env" ]; then
-  _v=$(grep '^LAT_PORT=' "$TARGET/latency-test/.env" 2>/dev/null | head -1 | cut -d= -f2); [ -n "$_v" ] && LATENCY_PORT="$_v"
-fi
-MAIN_IP=$(hostname -i 2>/dev/null | awk '{print $1}')
-[ -z "$MAIN_IP" ] && MAIN_IP=127.0.0.1
-echo
-log "完成！"
-if [ "$OPS_MODE" = "upgrade" ]; then
-  echo "  模式     : 更新/升级（本机配置已保留）"
-else
-  echo "  模式     : 全新安装"
-fi
-echo "  opsbox   : http://$MAIN_IP:$OPS_PORT/   密码/token: $OPS_PASSWORD"
-if [ -d "$TARGET/ai-terminal-bridge" ]; then
-  echo "  终端桥接 : http://127.0.0.1:$BRIDGE_PORT/  （已关联，opsbox 下拉菜单免登录跳转）"
-fi
-if [ -d "$TARGET/latency-test" ]; then
-  echo "  链路探针 : http://127.0.0.1:$LATENCY_PORT/"
-fi
-echo "  目录     : $TARGET"
-echo "  配置     : $TARGET/opsbox/.env（改密码后重启服务生效）"
-echo "  服务管理 : sh $TARGET/manage.sh        （交互菜单：状态/启动/停止/重启）"
-echo "             sh $TARGET/manage.sh status|start|stop|restart [all|ops|bridge|latency]"
-echo "  平台预览 : 服务已监听端口 $OPS_PORT（MonkeyCode 等平台会自动生成 <端口>- 前缀的预览地址）"
-echo
-log "登录 opsbox 后，通过右上角下拉菜单直达已安装的上游应用。"
