@@ -120,6 +120,12 @@ canvas{width:100%;height:130px;display:block}
 #tab-res th{text-align:left;color:var(--dim);padding:5px 8px;font-weight:600}
 #tab-res td{padding:4px 8px;font-size:12px}
 #tab-res td.num{font-family:ui-monospace,Consolas,monospace;text-align:right}
+/* 目录排行链接与明细文字提亮（默认链接深蓝在暗底看不清） */
+#scanBody a{color:var(--acc);text-decoration:none}
+#scanBody a:hover{text-decoration:underline}
+#scanBody td{color:var(--fg)}
+#scanBody td.num{color:var(--fg)}
+#tab-res th{white-space:nowrap;color:var(--dim)}
 .pwrap{max-height:300px;overflow:auto;margin-top:8px}
 .legend{display:flex;gap:16px;font-size:11px;color:var(--dim);margin-top:6px}
 .legend i{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px}
@@ -277,12 +283,11 @@ canvas{width:100%;height:130px;display:block}
       </div>
     </div>
     <div class="card">
-      <h3>dola 出片面板
-        <span>
-          <button id="relBrowsers" title="关闭所有登录/查看浏览器与残留 Chromium（正在出片的任务浏览器不受影响）">释放全部空闲 Chromium</button>
-          <button id="openDola">打开面板</button>
-        </span>
-      </h3>
+      <h3 style="display:block;margin-bottom:8px">dola 出片面板</h3>
+      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+        <button id="relBrowsers" title="关闭所有登录/查看浏览器与残留 Chromium（正在出片的任务浏览器不受影响）">释放全部空闲 Chromium</button>
+        <button id="openDola">打开面板</button>
+      </div>
       <div style="font-size:12px;color:var(--dim)">管理动作经运维台转发到面板（8004）执行；打开面板走免登录跳转。</div>
       <div id="dolaNote" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
     </div>
