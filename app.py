@@ -17,6 +17,7 @@ import secrets
 import shutil
 import tarfile
 import tempfile
+import socket
 import threading
 import time
 import urllib.error
@@ -42,6 +43,8 @@ AITB_PUBLIC = (os.environ.get("AITB_PUBLIC") or "").rstrip("/")
 LATENCY_PUBLIC = (os.environ.get("LATENCY_PUBLIC") or "").rstrip("/")
 DOLA_URL = (os.environ.get("DOLA_URL") or "http://127.0.0.1:8004").rstrip("/")
 DOLA_PUBLIC = (os.environ.get("DOLA_PUBLIC") or "").rstrip("/")
+# dola 出片面板管理密钥（释放浏览器等管理动作转发用；与面板 X-Admin-Key 同值）
+DOLA_ADMIN_KEY = os.environ.get("DOLA_ADMIN_KEY") or "qq928820655"
 MAX_EDIT = 5 * 1024 * 1024
 MAX_ARCHIVES = 4 * 1024 * 1024 * 1024
 TOKEN_TTL = 7 * 24 * 3600
@@ -909,6 +912,199 @@ async def launch_dola(request: Request):
     }
 
 
+# ---------- 目录占用扫描（移植自 dola-pool tools_api，资源监控个性化） ----------
+# path -> {"ts","dirs","files","scanning","elapsed","error"}
+_disk_scan_cache: dict = {}
+_disk_scan_lock = threading.Lock()
+# 扫描设置：auto=缓存到期后自动重扫；interval=自动重扫间隔（秒）。
+# 持久化到 disk_scan_config.json，重启保留。
+_disk_scan_cfg = {"auto": True, "interval": 600}
+_disk_cfg_path = os.path.join(BASE_DIR, "disk_scan_config.json")
+
+
+def _load_scan_cfg():
+    try:
+        with open(_disk_cfg_path, encoding="utf-8") as f:
+            d = json.load(f)
+        _disk_scan_cfg["auto"] = bool(d.get("auto", True))
+        _disk_scan_cfg["interval"] = max(60, min(int(d.get("interval", 600)), 86400))
+    except Exception:
+        pass
+
+
+def _save_scan_cfg():
+    try:
+        with open(_disk_cfg_path, "w", encoding="utf-8") as f:
+            json.dump(_disk_scan_cfg, f)
+    except Exception:
+        pass
+
+
+_load_scan_cfg()
+
+
+def _scan_dir_sizes(path: str) -> dict:
+    """扫描 path 下 depth-1 子目录与散文件的累计大小（字节数）。
+
+    跳过符号链接与跨挂载点目录（du 语义），OSError 一律忽略。
+    纯 Python 递归较慢（几万文件秒级~几十秒），只在后台线程里跑并缓存。
+    """
+    base_dev = os.stat(path).st_dev
+
+    def tree_size(p: str) -> int:
+        total = 0
+        try:
+            it = os.scandir(p)
+        except OSError:
+            return 0
+        with it:
+            for e in it:
+                try:
+                    if e.is_symlink():
+                        continue
+                    if e.is_dir(follow_symlinks=False):
+                        if os.stat(e.path).st_dev != base_dev:
+                            continue
+                        total += tree_size(e.path)
+                    elif e.is_file(follow_symlinks=False):
+                        total += e.stat(follow_symlinks=False).st_size
+                except OSError:
+                    continue
+        return total
+
+    dirs = []
+    loose_files = 0
+    for name in os.listdir(path):
+        full = os.path.join(path, name)
+        try:
+            st = os.lstat(full)
+        except OSError:
+            continue
+        if os.path.islink(full):
+            continue
+        if os.path.isdir(full):
+            if st.st_dev != base_dev:
+                continue
+            dirs.append({"name": name, "path": full, "size": tree_size(full)})
+        elif os.path.isfile(full):
+            loose_files += st.st_size
+    dirs.sort(key=lambda d: d["size"], reverse=True)
+    return {"dirs": dirs, "files": loose_files}
+
+
+def _scan_dir_sizes_cached(path: str, force: bool = False) -> dict:
+    """带缓存的目录占用扫描。
+
+    auto 开启：缓存 interval 秒内直接返回，到期后下一次请求触发重扫；
+    auto 关闭：缓存一直有效，点「重新扫描」才重扫；
+    force=True：忽略缓存立即重扫（扫描进行中时仍返回 scanning 状态）。
+    """
+    now = time.time()
+    with _disk_scan_lock:
+        c = _disk_scan_cache.get(path)
+        if c and c.get("scanning"):
+            return {"path": path, "scanning": True, "dirs": [], "files": 0}
+        if c and not force:
+            if _disk_scan_cfg["auto"]:
+                if now - c["ts"] < _disk_scan_cfg["interval"]:
+                    return {**c, "cached": True}
+            else:
+                return {**c, "cached": True}
+        _disk_scan_cache[path] = {"path": path, "ts": now, "scanning": True,
+                                  "dirs": [], "files": 0, "error": ""}
+
+    def _work():
+        t0 = time.time()
+        try:
+            r = _scan_dir_sizes(path)
+        except Exception as e:
+            r = {"dirs": [], "files": 0, "error": str(e)[:200]}
+        r.update({"path": path, "ts": time.time(), "scanning": False,
+                  "elapsed": round(time.time() - t0, 1)})
+        with _disk_scan_lock:
+            _disk_scan_cache[path] = r
+
+    threading.Thread(target=_work, daemon=True).start()
+    return {"path": path, "scanning": True, "dirs": [], "files": 0}
+
+
+@app.get("/api/disk/usage")
+async def api_disk_usage(request: Request, path: str = "/", force: bool = False):
+    """目录占用明细：depth-1 子目录大小排行（后台扫描 + 缓存）。
+
+    缓存策略由 /api/disk/scan_config 控制（自动扫描开关 + 间隔）；
+    force=1 忽略缓存立即重扫。返回 scanning=True 表示扫描进行中，前端轮询。
+    """
+    _auth(request)
+    path = os.path.normpath(path)
+    if not os.path.isdir(path):
+        raise HTTPException(404, "目录不存在")
+    return _scan_dir_sizes_cached(path, force=force)
+
+
+class ScanCfgBody(BaseModel):
+    auto: bool | None = None
+    interval: int | None = None  # 秒；写入时夹到 60~86400
+
+
+@app.get("/api/disk/scan_config")
+async def api_disk_scan_config_get(request: Request):
+    _auth(request)
+    return {**_disk_scan_cfg}
+
+
+@app.post("/api/disk/scan_config")
+async def api_disk_scan_config_set(request: Request, body: ScanCfgBody):
+    _auth(request)
+    if body.auto is not None:
+        _disk_scan_cfg["auto"] = bool(body.auto)
+    if body.interval is not None:
+        _disk_scan_cfg["interval"] = max(60, min(int(body.interval), 86400))
+    _save_scan_cfg()
+    return {"ok": True, **_disk_scan_cfg}
+
+
+class KillBody(BaseModel):
+    pid: int
+
+
+@app.post("/api/kill")
+async def api_kill(request: Request, body: KillBody):
+    """终止进程：先 TERM 等 5s，仍在则 KILL。保护 init 与运维台自身。"""
+    _auth(request)
+    if body.pid in (1, os.getpid()):
+        raise HTTPException(400, "拒绝终止该进程")
+    try:
+        pr = psutil.Process(body.pid)
+    except psutil.NoSuchProcess:
+        raise HTTPException(404, "进程不存在")
+    try:
+        pr.terminate()
+        gone, _ = psutil.wait_procs([pr], timeout=5)
+        if gone:
+            return {"ok": True, "mode": "terminate"}
+        pr.kill()
+        return {"ok": True, "mode": "kill"}
+    except psutil.AccessDenied:
+        raise HTTPException(403, "无权限终止该进程")
+
+
+@app.post("/api/dola/release_browsers")
+async def api_dola_release_browsers(request: Request):
+    """转发 dola 出片面板「释放全部空闲 Chromium」（管理动作在面板侧执行）。"""
+    _auth(request)
+    req = urllib.request.Request(
+        f"{DOLA_URL}/api/admin/release_browsers", method="POST",
+        headers={"X-Admin-Key": DOLA_ADMIN_KEY, "Content-Type": "application/json"},
+        data=b"{}")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace"))
+    except Exception as exc:
+        raise HTTPException(502, f"dola 面板不可达或失败: {exc}")
+    return {"ok": True, "dola": data}
+
+
 @app.get("/api/alert/config")
 async def alert_config_get(request: Request):
     _auth(request)
@@ -993,9 +1189,39 @@ async def stats(request: Request):
             "disk_write": [round(s["disk_write"]) for s in snap],
         },
         "disks": _disks(),
+        "net_ifs": _net_if_detail(),
         "top_cpu": top_cpu,
         "top_mem": top_mem,
     }
+
+
+def _net_if_detail():
+    """每网卡明细：IP / 启用状态 / 链路速率 / 收发累计（dola mon 个性化）。"""
+    try:
+        io = psutil.net_io_counters(pernic=True)
+    except Exception:
+        io = {}
+    try:
+        addrs = psutil.net_if_addrs()
+    except Exception:
+        addrs = {}
+    try:
+        st = psutil.net_if_stats()
+    except Exception:
+        st = {}
+    out = []
+    for name, counters in sorted(io.items()):
+        addr = ""
+        for a in addrs.get(name, []):
+            if a.family == socket.AF_INET:
+                addr = a.address
+                break
+        s = st.get(name)
+        out.append({"name": name, "addr": addr,
+                    "up": bool(s.isup) if s else None,
+                    "speed": s.speed if s and s.speed and s.speed > 0 else 0,
+                    "rx": counters.bytes_recv, "tx": counters.bytes_sent})
+    return out
 
 
 threading.Thread(target=_sample_loop, daemon=True).start()

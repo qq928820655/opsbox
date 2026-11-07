@@ -251,6 +251,42 @@ canvas{width:100%;height:130px;display:block}
       <div id="diskList"></div>
     </div>
     <div class="card" style="grid-column:1/-1">
+      <h3>磁盘占用分析（目录排行）
+        <span>
+          <input id="scanPath" value="/workspace/dola-pool" style="width:240px;padding:4px 8px">
+          <button id="scanBtn">开始扫描</button>
+          <label style="font-size:12px;color:var(--dim)"><input type="checkbox" id="scanAutoChk" style="width:auto">自动扫描</label>
+          <span style="font-size:12px;color:var(--dim)">每 <input type="number" id="scanMinInput" min="1" max="1440" value="10" style="width:56px;padding:2px 6px"> 分钟重扫一次</span>
+        </span>
+      </h3>
+      <div id="scanMeta" style="font-size:12px;color:var(--dim);margin-bottom:8px">输入路径后点「开始扫描」；扫描在后台进行，大目录需数秒到数十秒。</div>
+      <div class="pwrap">
+        <table>
+          <thead><tr><th>目录（点击进入下级）</th><th style="text-align:right">大小</th></tr></thead>
+          <tbody id="scanBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>网卡详情</h3>
+      <div class="pwrap">
+        <table>
+          <thead><tr><th>网卡</th><th>IP</th><th>状态</th><th style="text-align:right">速率</th><th style="text-align:right">收/发累计</th></tr></thead>
+          <tbody id="nicBody"></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card">
+      <h3>dola 出片面板
+        <span>
+          <button id="relBrowsers" title="关闭所有登录/查看浏览器与残留 Chromium（正在出片的任务浏览器不受影响）">释放全部空闲 Chromium</button>
+          <button id="openDola">打开面板</button>
+        </span>
+      </h3>
+      <div style="font-size:12px;color:var(--dim)">管理动作经运维台转发到面板（8004）执行；打开面板走免登录跳转。</div>
+      <div id="dolaNote" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
+    </div>
+    <div class="card" style="grid-column:1/-1">
       <h3>进程
         <span>
           <button id="byCpu" class="btn-active">按 CPU</button>
@@ -259,7 +295,7 @@ canvas{width:100%;height:130px;display:block}
       </h3>
       <div class="pwrap">
         <table>
-          <thead><tr><th>PID</th><th>名称</th><th>用户</th><th>状态</th><th style="text-align:right">CPU%</th><th style="text-align:right">内存%</th><th style="text-align:right">RSS</th></tr></thead>
+          <thead><tr><th>PID</th><th>名称</th><th>用户</th><th>状态</th><th style="text-align:right">CPU%</th><th style="text-align:right">内存%</th><th style="text-align:right">RSS</th><th style="width:70px">操作</th></tr></thead>
           <tbody id="procBody"></tbody>
         </table>
       </div>
@@ -350,6 +386,13 @@ canvas{width:100%;height:130px;display:block}
 
 <script>
 const $ = id => document.getElementById(id);
+// SSO 免登录：dola 运维管理入口带 ?token= 跳入，落到 localStorage 后清掉 URL 参数
+(function(){
+  const u = new URLSearchParams(location.search);
+  const t = u.get('token');
+  if(t){ localStorage.setItem('ops_token', t); u.delete('token');
+         history.replaceState(null,'',location.pathname+(u.toString()?'?'+u:'')); }
+})();
 let token = localStorage.getItem('ops_token') || localStorage.getItem('fb_token')
          || localStorage.getItem('rm_token') || '';
 if(token) localStorage.setItem('ops_token', token);
@@ -418,7 +461,7 @@ function switchTab(t, skipHash){
     const h = t==='files' ? '#files' : (t==='alert' ? '#alert' : '#res');
     if(location.hash !== h) history.replaceState(null, '', h);
   }
-  if(t==='res'){ resRefresh(); resStart(); } else resStop();
+  if(t==='res'){ resRefresh(); resStart(); if(!$('scanAutoChk').dataset.loaded){loadScanCfg();scanDisk();$('scanAutoChk').dataset.loaded='1';} } else resStop();
   if(t==='alert') alertLoad();
 }
 window.addEventListener('hashchange', ()=>{
@@ -770,11 +813,89 @@ async function resRefresh(){
 
   const rows = sortBy==='cpu' ? d.top_cpu : d.top_mem;
   $('procBody').innerHTML = rows.map(p=>`<tr>
-    <td class="num">${p.pid}</td><td>${p.name}</td><td>${p.user}</td><td>${p.status}</td>
+    <td class="num">${p.pid}</td><td>${esc(p.name)}</td><td>${esc(p.user)}</td><td>${p.status}</td>
     <td class="num" style="color:${p.cpu>50?'var(--err)':'inherit'}">${p.cpu}</td>
     <td class="num">${p.mem}</td>
-    <td class="num">${fmtSize(p.rss)}</td></tr>`).join('');
+    <td class="num">${fmtSize(p.rss)}</td>
+    <td><button class="danger" style="padding:2px 8px" onclick="killProc(${p.pid},'${esc(p.name).replace(/'/g,'')}')">终止</button></td></tr>`).join('');
+  renderNic(d);
 }
+
+/* ---- 网卡详情 + 磁盘占用分析 + 进程终止 + dola 面板动作（dola mon.html 个性化移植） ---- */
+async function killProc(pid,name){
+  if(!confirm(`终止进程 ${pid} ${name}？`))return;
+  try{ await api('/api/kill',{method:'POST',body:{pid}}); toast(`已终止 ${pid}`); resRefresh(); }
+  catch(e){ toast('终止失败: '+e.message,'err'); }
+}
+function renderNic(d){
+  const ifs=d.net_ifs||[];
+  $('nicBody').innerHTML = ifs.map(n=>`<tr>
+    <td>${esc(n.name)}</td><td>${esc(n.addr||'—')}</td>
+    <td>${n.up===false?'<span style="color:var(--dim)">down</span>':'<span style="color:var(--ok)">up</span>'}</td>
+    <td class="num">${n.speed||'—'}${n.speed?' Mbps':''}</td>
+    <td class="num">${fmtSize(n.rx)}/${fmtSize(n.tx)}</td></tr>`).join('')
+    || '<tr><td colspan="5" style="color:var(--dim)">无数据</td></tr>';
+}
+let scanTimer=null;
+function fmtBytes(b){
+  b=+b||0;const u=['B','KB','MB','GB','TB'];let i=0;while(b>=1024&&i<u.length-1){b/=1024;i++;}
+  return (i?b.toFixed(1):b)+' '+u[i];
+}
+function fmtScanMeta(d){
+  if(d.scanning)return '扫描进行中…（后台递归统计，前端自动轮询）';
+  const t=d.ts?new Date(d.ts*1000).toLocaleTimeString():'';
+  let s=`${esc(d.path)} • 更新 ${t} • 耗时 ${d.elapsed??'—'}s • 散文件 ${fmtBytes(d.files)}`;
+  if(d.cached)s+=' • 缓存';
+  if(d.error)s+=` • 错误: ${esc(d.error)}`;
+  return s;
+}
+async function scanDisk(force){
+  const path=($('scanPath').value||'/').trim();
+  try{
+    const d=await api('/api/disk/usage?path='+encodeURIComponent(path)+(force?'&force=1':''));
+    renderScan(d);
+  }catch(e){ $('scanMeta').textContent='扫描失败: '+e.message; }
+}
+function renderScan(d){
+  $('scanMeta').textContent=fmtScanMeta(d);
+  $('scanBody').innerHTML=(d.dirs||[]).map(x=>`<tr>
+    <td><a href="javascript:void(0)" onclick="$('scanPath').value='${esc(x.path)}';scanDisk()">${esc(x.name)}</a></td>
+    <td class="num">${fmtBytes(x.size)}</td></tr>`).join('')
+    || (d.scanning?'<tr><td colspan="2" style="color:var(--dim)">扫描中…</td></tr>':'<tr><td colspan="2" style="color:var(--dim)">无子目录</td></tr>');
+  if(scanTimer){clearInterval(scanTimer);scanTimer=null;}
+  if(d.scanning)scanTimer=setInterval(()=>{const p=($('scanPath').value||'/').trim();
+    api('/api/disk/usage?path='+encodeURIComponent(p)).then(renderScan).catch(()=>{});},2000);
+}
+async function loadScanCfg(){
+  try{
+    const c=await api('/api/disk/scan_config');
+    $('scanAutoChk').checked=!!c.auto;
+    $('scanMinInput').value=Math.round((c.interval||600)/60);
+  }catch(e){}
+}
+async function saveScanCfg(){
+  try{
+    await api('/api/disk/scan_config',{method:'POST',body:{
+      auto:$('scanAutoChk').checked,
+      interval:Math.round((+$('scanMinInput').value||10)*60)}});
+    toast('扫描设置已保存');
+  }catch(e){ toast('保存失败: '+e.message,'err'); }
+}
+async function relBrowsers(){
+  const b=$('relBrowsers');b.disabled=true;
+  try{
+    const r=await api('/api/dola/release_browsers',{method:'POST'});
+    const k=(r.dola&&(r.dola.released??r.dola.count))??'';
+    $('dolaNote').textContent=`已执行 ${new Date().toLocaleTimeString()}${k!==''?`（${k}）`:''}`;
+    toast('释放指令已执行');
+  }catch(e){ toast('执行失败: '+e.message,'err'); }
+  b.disabled=false;
+}
+$('openDola').onclick=()=>launchApp('dola');
+$('scanBtn').onclick=()=>scanDisk(true);
+$('scanAutoChk').onchange=saveScanCfg;
+$('scanMinInput').onchange=saveScanCfg;
+$('relBrowsers').onclick=relBrowsers;
 
 function resStart(){
   clearInterval(resTimer);
@@ -910,6 +1031,7 @@ async function doLogin(){
     if(e.message!=='未登录'){ toast('加载失败: '+e.message,'warn'); }
   }
   if(activeTab==='files') loadDir('/workspace');
+  if(activeTab==='res'){ loadScanCfg(); scanDisk(); }
   if(activeTab==='alert') alertLoad();
 })();
 </script>
