@@ -477,7 +477,7 @@ window.addEventListener('hashchange', ()=>{
 /* ================= 文件管理 ================= */
 async function loadDir(path){
   try{
-    const data = await api('/api/list?path='+encodeURIComponent(path));
+    const data = await api('api/list?path='+encodeURIComponent(path));
     cwd = data.path; entries = data.entries; searchMode = false;
     sel.clear(); clip = null;
     $('pathInput').value = cwd;
@@ -548,12 +548,12 @@ $('upBtn').onclick = ()=> loadDir(cwd.replace(/\/[^\/]*$/,'') || '/');
 
 $('newFileBtn').onclick = ()=> promptModal('新建文件（当前目录）', '', name=>{
   if(!name) return;
-  api('/api/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:joinPath(cwd,name)})})
+  api('api/touch',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:joinPath(cwd,name)})})
     .then(()=>{ toast('已创建 '+name); loadDir(cwd); }).catch(e=>toast(e.message,'err'));
 });
 $('newDirBtn').onclick = ()=> promptModal('新建目录（当前目录）', '', name=>{
   if(!name) return;
-  api('/api/mkdir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:joinPath(cwd,name)})})
+  api('api/mkdir',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:joinPath(cwd,name)})})
     .then(()=>{ toast('已创建 '+name); loadDir(cwd); }).catch(e=>toast(e.message,'err'));
 });
 $('uploadBtn').onclick = ()=> $('fileInput').click();
@@ -562,7 +562,7 @@ $('fileInput').addEventListener('change', async e=>{
   for(const f of files){
     const fd = new FormData();
     fd.append('dest', cwd); fd.append('file', f);
-    try{ await api('/api/upload',{method:'POST',body:fd}); toast('已上传 '+f.name); }
+    try{ await api('api/upload',{method:'POST',body:fd}); toast('已上传 '+f.name); }
     catch(err){ toast(f.name+': '+err.message,'err'); }
   }
   e.target.value=''; loadDir(cwd);
@@ -571,7 +571,7 @@ $('copyBtn').onclick = ()=>{ clip={mode:'copy',paths:[...sel]}; renderChip(); to
 $('cutBtn').onclick = ()=>{ clip={mode:'cut',paths:[...sel]}; renderChip(); toast('已剪切 '+sel.size+' 项'); };
 $('pasteBtn').onclick = ()=>{
   if(!clip) return;
-  const ep = clip.mode==='copy' ? '/api/copy' : '/api/move';
+  const ep = clip.mode==='copy' ? 'api/copy' : 'api/move';
   api(ep,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({srcs:clip.paths,dest:cwd})})
     .then(r=>{
       if(r.errors && r.errors.length) toast(r.errors.map(x=>x.path+': '+x.error).join('; '),'err');
@@ -590,14 +590,14 @@ $('renameBtn').onclick = ()=>{
   const p = [...sel][0];
   promptModal('重命名', p.split('/').pop(), name=>{
     if(!name || name===p.split('/').pop()) return;
-    api('/api/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,new_name:name})})
+    api('api/rename',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p,new_name:name})})
       .then(()=>{ toast('已重命名'); loadDir(cwd); }).catch(e=>toast(e.message,'err'));
   });
 };
 $('delBtn').onclick = ()=>{
   if(!sel.size) return;
   if(!confirm(`确定删除选中的 ${sel.size} 项？目录将被整个删除，不可恢复！`)) return;
-  api('/api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths:[...sel]})})
+  api('api/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({paths:[...sel]})})
     .then(r=>{
       if(r.errors && r.errors.length) toast(r.errors.map(x=>x.path+': '+x.error).join('; '),'err');
       else toast('删除完成');
@@ -613,7 +613,7 @@ $('dlBtn').onclick = ()=>{
 };
 $('unzipBtn').onclick = ()=>{
   const p = [...sel][0];
-  api('/api/unarchive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})})
+  api('api/unarchive',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:p})})
     .then(r=>{ toast('已解压到 '+r.dest); loadDir(cwd); }).catch(e=>toast(e.message,'err'));
 };
 
@@ -622,7 +622,7 @@ async function doSearch(){
   const q = $('searchInput').value.trim();
   if(!q){ toast('请输入搜索关键词','warn'); return; }
   try{
-    const r = await api('/api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:cwd,q})});
+    const r = await api('api/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({dir:cwd,q})});
     currentResults = r.results; searchMode = true; sel.clear();
     render();
     if(r.truncated) toast('结果较多，仅显示前 '+r.results.length+' 条','warn');
@@ -632,14 +632,14 @@ $('searchBtn').onclick = doSearch;
 $('searchInput').addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
 
 function openPreview(p){
-  $('previewBox').innerHTML = `<img src="/api/preview?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}" alt="">`;
+  $('previewBox').innerHTML = `<img src="api/preview?path=${encodeURIComponent(p)}&token=${encodeURIComponent(token)}" alt="">`;
   $('previewOverlay').classList.remove('hidden');
 }
 $('previewOverlay').onclick = ()=> $('previewOverlay').classList.add('hidden');
 
 async function openEditor(p){
   try{
-    const r = await api('/api/read?path='+encodeURIComponent(p));
+    const r = await api('api/read?path='+encodeURIComponent(p));
     if(r.binary){ toast(r.too_big?'文件过大（>5MB），不支持在线编辑':'二进制文件，不支持在线编辑','warn'); return; }
     editPath = p; editDirty = false;
     $('edName').textContent = p;
@@ -661,7 +661,7 @@ $('edText').addEventListener('keydown', e=>{
 });
 async function saveEditor(){
   try{
-    await api('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},
+    await api('api/save',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({path:editPath, content:$('edText').value, encoding:$('edEnc').value})});
     editDirty=false; $('edDirty').style.display='none';
     toast('已保存 '+editPath);
@@ -755,7 +755,7 @@ function lineChart(cv, series, opts={}){
 async function resRefresh(){
   if(activeTab!=='res') return;
   let d;
-  try{ d = await api('/api/stats'); }catch(e){ if(e.message!=='未登录') console.warn(e); return; }
+  try{ d = await api('api/stats'); }catch(e){ if(e.message!=='未登录') console.warn(e); return; }
   const s = d.cur;
   const sys = d.sys;
   $('sysinfo').innerHTML =
@@ -828,7 +828,7 @@ async function resRefresh(){
 /* ---- 网卡详情 + 磁盘占用分析 + 进程终止 + dola 面板动作（dola mon.html 个性化移植） ---- */
 async function killProc(pid,name){
   if(!confirm(`终止进程 ${pid} ${name}？`))return;
-  try{ await api('/api/kill',{method:'POST',body:{pid}}); toast(`已终止 ${pid}`); resRefresh(); }
+  try{ await api('api/kill',{method:'POST',body:{pid}}); toast(`已终止 ${pid}`); resRefresh(); }
   catch(e){ toast('终止失败: '+e.message,'err'); }
 }
 function renderNic(d){
@@ -856,7 +856,7 @@ function fmtScanMeta(d){
 async function scanDisk(force){
   const path=($('scanPath').value||'/').trim();
   try{
-    const d=await api('/api/disk/usage?path='+encodeURIComponent(path)+(force?'&force=1':''));
+    const d=await api('api/disk/usage?path='+encodeURIComponent(path)+(force?'&force=1':''));
     renderScan(d);
   }catch(e){ $('scanMeta').textContent='扫描失败: '+e.message; }
 }
@@ -868,18 +868,18 @@ function renderScan(d){
     || (d.scanning?'<tr><td colspan="2" style="color:var(--dim)">扫描中…</td></tr>':'<tr><td colspan="2" style="color:var(--dim)">无子目录</td></tr>');
   if(scanTimer){clearInterval(scanTimer);scanTimer=null;}
   if(d.scanning)scanTimer=setInterval(()=>{const p=($('scanPath').value||'/').trim();
-    api('/api/disk/usage?path='+encodeURIComponent(p)).then(renderScan).catch(()=>{});},2000);
+    api('api/disk/usage?path='+encodeURIComponent(p)).then(renderScan).catch(()=>{});},2000);
 }
 async function loadScanCfg(){
   try{
-    const c=await api('/api/disk/scan_config');
+    const c=await api('api/disk/scan_config');
     $('scanAutoChk').checked=!!c.auto;
     $('scanMinInput').value=Math.round((c.interval||600)/60);
   }catch(e){}
 }
 async function saveScanCfg(){
   try{
-    await api('/api/disk/scan_config',{method:'POST',body:{
+    await api('api/disk/scan_config',{method:'POST',body:{
       auto:$('scanAutoChk').checked,
       interval:Math.round((+$('scanMinInput').value||10)*60)}});
     toast('扫描设置已保存');
@@ -888,7 +888,7 @@ async function saveScanCfg(){
 async function relBrowsers(){
   const b=$('relBrowsers');b.disabled=true;
   try{
-    const r=await api('/api/dola/release_browsers',{method:'POST'});
+    const r=await api('api/dola/release_browsers',{method:'POST'});
     const k=(r.dola&&(r.dola.released??r.dola.count))??'';
     $('dolaNote').textContent=`已执行 ${new Date().toLocaleTimeString()}${k!==''?`（${k}）`:''}`;
     toast('释放指令已执行');
@@ -928,7 +928,7 @@ window.addEventListener('resize', ()=>{ if(activeTab==='res' && !paused) resRefr
 /* ---- 内置应用跳转（复用 ops 登录态，无需二次登录） ---- */
 async function launchApp(kind){
   closeBrandMenu();
-  const paths = {'bridge':'/api/launch/bridge','latency':'/api/launch/latency','dola':'/api/launch/dola'};
+  const paths = {'bridge':'api/launch/bridge','latency':'api/launch/latency','dola':'api/launch/dola'};
   const path = paths[kind];
   if(!path)return;
   try{
@@ -981,7 +981,7 @@ function alertFill(c){
 async function alertLoad(){
   if(!token){ return; }
   try{
-    const c = await api('/api/alert/config');
+    const c = await api('api/alert/config');
     alertFill(c);
     alertMsg(c.has_token ? '已保存 Token（掩码显示），直接保存不会覆盖' : '尚未配置 pushplus token', '');
   }catch(e){ alertMsg('读取配置失败: '+e.message, 'err'); }
@@ -998,7 +998,7 @@ async function alertSave(){
     check_interval_s: Number($('alInterval').value) || 60,
   };
   try{
-    const r = await api('/api/alert/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const r = await api('api/alert/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
     alertFill(r.config);
     alertMsg('已保存', 'ok');
   }catch(e){ alertMsg('保存失败: '+e.message, 'err'); }
@@ -1006,7 +1006,7 @@ async function alertSave(){
 async function alertTest(){
   alertMsg('正在发送测试消息…', '');
   try{
-    const r = await api('/api/alert/test', {method:'POST'});
+    const r = await api('api/alert/test', {method:'POST'});
     alertMsg(r.message || '测试消息已发送', 'ok');
   }catch(e){ alertMsg('测试失败: '+e.message, 'err'); }
 }
@@ -1020,7 +1020,7 @@ $('loginPwd').addEventListener('keydown', e=>{ if(e.key==='Enter') doLogin(); })
 async function doLogin(){
   $('loginErr').textContent = '';
   try{
-    const r = await fetch('/api/login',{method:'POST',headers:{'Content-Type':'application/json'},
+    const r = await fetch('api/login',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({password:$('loginPwd').value})});
     if(!r.ok){ const e=await r.json().catch(()=>({})); $('loginErr').textContent = e.detail||'登录失败'; return; }
     const d = await r.json();
