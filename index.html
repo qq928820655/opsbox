@@ -467,6 +467,7 @@ function switchTab(t, skipHash){
     if(location.hash !== h) history.replaceState(null, '', h);
   }
   if(t==='res'){ resRefresh(); resStart(); } else resStop();
+  if(t==='files') loadDir(cwd);
   if(t==='alert') alertLoad();
 }
 window.addEventListener('hashchange', ()=>{
@@ -1033,19 +1034,12 @@ async function doLogin(){
   }catch(e){ $('loginErr').textContent = e.message; }
 }
 
-/* ---- 启动：探测 token，有效则按 hash 进对应页；401 弹登录 ---- */
+/* ---- 启动：按 hash 定位 tab 并立即加载数据（switchTab 统一触发各 tab 拉取，token 无效时由 401 弹登录） ---- */
 (async function init(){
   const h0 = location.hash;
   const t0 = h0 === '#files' ? 'files' : (h0 === '#alert' ? 'alert' : 'res');
-  if(t0 !== activeTab) switchTab(t0, true);
-  if(!token){ showLogin(); return; }
-  try{
-    await api('/api/stats');
-  }catch(e){
-    if(e.message!=='未登录'){ toast('加载失败: '+e.message,'warn'); }
-  }
-  if(activeTab==='files') loadDir('/workspace');
-  if(activeTab==='alert') alertLoad();
+  switchTab(t0, true);
+  if(!token) showLogin();
 })();
 </script>
 </body>
