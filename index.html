@@ -247,6 +247,15 @@ canvas{width:100%;height:130px;display:block}
       <canvas id="netChart"></canvas>
       <div class="legend"><span><i style="background:#3fb950"></i>↓ 下载</span><span><i style="background:#d29922"></i>↑ 上传</span><span id="netTotal"></span></div>
     </div>
+    <div class="card" style="grid-column:3;grid-row:2">
+      <h3>网卡详情</h3>
+      <div class="pwrap">
+        <table>
+          <thead><tr><th>网卡</th><th>IP</th><th>状态</th><th style="text-align:right">速率</th><th style="text-align:right">收/发累计</th></tr></thead>
+          <tbody id="nicBody"></tbody>
+        </table>
+      </div>
+    </div>
     <div class="card">
       <h3>磁盘 IO <span class="big" id="ioBig">—</span></h3>
       <canvas id="ioChart"></canvas>
@@ -278,31 +287,17 @@ canvas{width:100%;height:130px;display:block}
         </div>
       </div>
     </div>
-    <div class="card">
-      <h3>网卡详情</h3>
-      <div class="pwrap">
-        <table>
-          <thead><tr><th>网卡</th><th>IP</th><th>状态</th><th style="text-align:right">速率</th><th style="text-align:right">收/发累计</th></tr></thead>
-          <tbody id="nicBody"></tbody>
-        </table>
-      </div>
-    </div>
-    <div class="card">
-      <h3 style="display:block;margin-bottom:8px">dola 出片面板</h3>
-      <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-        <button id="relBrowsers" title="关闭所有登录/查看浏览器与残留 Chromium（正在出片的任务浏览器不受影响）">释放全部空闲 Chromium</button>
-        <button id="openDola">打开面板</button>
-      </div>
-      <div style="font-size:12px;color:var(--dim)">管理动作经运维台转发到面板（8004）执行；打开面板走免登录跳转。</div>
-      <div id="dolaNote" style="font-size:12px;color:var(--dim);margin-top:8px"></div>
-    </div>
     <div class="card" style="grid-column:1/-1">
       <h3>进程
         <span>
           <button id="byCpu" class="btn-active">按 CPU</button>
           <button id="byMem">按内存</button>
+          <span style="width:1px;height:22px;background:var(--bd);display:inline-block;margin:0 4px;vertical-align:middle"></span>
+          <button id="relBrowsers" title="关闭所有登录/查看浏览器与残留 Chromium（正在出片的任务浏览器不受影响）；经运维台转发到面板（8004）执行">释放全部空闲 Chromium</button>
+          <button id="openDola" title="免登录跳转到 dola 出片面板（8004）">打开面板</button>
         </span>
       </h3>
+      <div id="dolaNote" style="font-size:12px;color:var(--dim);margin:-4px 0 8px">释放/打开动作经运维台转发到 dola 面板（8004）；打开面板走免登录跳转。</div>
       <div class="pwrap">
         <table>
           <thead><tr><th>PID</th><th>名称</th><th>用户</th><th>状态</th><th style="text-align:right">CPU%</th><th style="text-align:right">内存%</th><th style="text-align:right">RSS</th><th style="width:70px">操作</th></tr></thead>
