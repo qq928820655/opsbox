@@ -125,6 +125,7 @@ canvas{width:100%;height:130px;display:block}
 #scanBody a:hover{text-decoration:underline}
 #scanBody td{color:var(--fg)}
 #scanBody td.num{color:var(--fg)}
+#nicBody td{padding:4px 6px;font-size:12px}
 #tab-res th{white-space:nowrap;color:var(--dim)}
 .pwrap{max-height:300px;overflow:auto;margin-top:8px}
 .legend{display:flex;gap:16px;font-size:11px;color:var(--dim);margin-top:6px}
@@ -246,12 +247,9 @@ canvas{width:100%;height:130px;display:block}
       <h3>网络 <span class="big" id="netBig">—</span></h3>
       <canvas id="netChart"></canvas>
       <div class="legend"><span><i style="background:#3fb950"></i>↓ 下载</span><span><i style="background:#d29922"></i>↑ 上传</span><span id="netTotal"></span></div>
-    </div>
-    <div class="card" style="grid-column:3;grid-row:2">
-      <h3>网卡详情</h3>
-      <div class="pwrap">
-        <table>
-          <thead><tr><th>网卡</th><th>IP</th><th>状态</th><th style="text-align:right">速率</th><th style="text-align:right">收/发累计</th></tr></thead>
+      <div class="pwrap" style="max-height:150px">
+        <table style="font-size:12px">
+          <thead><tr><th style="padding:4px 6px">网卡</th><th style="padding:4px 6px">IP</th><th style="padding:4px 6px">状态</th><th style="padding:4px 6px;text-align:right">速率</th><th style="padding:4px 6px;text-align:right">收/发累计</th></tr></thead>
           <tbody id="nicBody"></tbody>
         </table>
       </div>
