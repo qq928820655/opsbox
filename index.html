@@ -259,18 +259,23 @@ canvas{width:100%;height:130px;display:block}
     <div class="card" style="grid-column:1/-1">
       <h3>磁盘占用分析（目录排行）
         <span>
+          <button id="scanToggle" title="默认折叠不加载；展开时才发起扫描">展开</button>
+        </span>
+      </h3>
+      <div id="scanWrap" style="display:none">
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
           <input id="scanPath" value="/workspace/dola-pool" style="width:240px;padding:4px 8px">
           <button id="scanBtn">开始扫描</button>
           <label style="font-size:12px;color:var(--dim)"><input type="checkbox" id="scanAutoChk" style="width:auto">自动扫描</label>
           <span style="font-size:12px;color:var(--dim)">每 <input type="number" id="scanMinInput" min="1" max="1440" value="10" style="width:56px;padding:2px 6px"> 分钟重扫一次</span>
-        </span>
-      </h3>
-      <div id="scanMeta" style="font-size:12px;color:var(--dim);margin-bottom:8px">输入路径后点「开始扫描」；扫描在后台进行，大目录需数秒到数十秒。</div>
-      <div class="pwrap">
-        <table>
-          <thead><tr><th>目录（点击进入下级）</th><th style="text-align:right">大小</th></tr></thead>
-          <tbody id="scanBody"></tbody>
-        </table>
+        </div>
+        <div id="scanMeta" style="font-size:12px;color:var(--dim);margin-bottom:8px">输入路径后点「开始扫描」；扫描在后台进行，大目录需数秒到数十秒。</div>
+        <div class="pwrap">
+          <table>
+            <thead><tr><th>目录（点击进入下级）</th><th style="text-align:right">大小</th></tr></thead>
+            <tbody id="scanBody"></tbody>
+          </table>
+        </div>
       </div>
     </div>
     <div class="card">
@@ -466,7 +471,7 @@ function switchTab(t, skipHash){
     const h = t==='files' ? '#files' : (t==='alert' ? '#alert' : '#res');
     if(location.hash !== h) history.replaceState(null, '', h);
   }
-  if(t==='res'){ resRefresh(); resStart(); if(!$('scanAutoChk').dataset.loaded){loadScanCfg();scanDisk();$('scanAutoChk').dataset.loaded='1';} } else resStop();
+  if(t==='res'){ resRefresh(); resStart(); } else resStop();
   if(t==='alert') alertLoad();
 }
 window.addEventListener('hashchange', ()=>{
@@ -897,6 +902,15 @@ async function relBrowsers(){
   b.disabled=false;
 }
 $('openDola').onclick=()=>launchApp('dola');
+let scanOpened=false;
+$('scanToggle').onclick=()=>{
+  const w=$('scanWrap'),open=w.style.display==='none';
+  w.style.display=open?'':'none';
+  $('scanToggle').textContent=open?'收起':'展开';
+  $('scanToggle').classList.toggle('btn-active',open);
+  if(open&&!scanOpened){scanOpened=true;loadScanCfg();scanDisk();$('scanAutoChk').dataset.loaded='1';}
+  if(!open&&scanTimer){clearInterval(scanTimer);scanTimer=null;}
+};
 $('scanBtn').onclick=()=>scanDisk(true);
 $('scanAutoChk').onchange=saveScanCfg;
 $('scanMinInput').onchange=saveScanCfg;
@@ -1036,7 +1050,6 @@ async function doLogin(){
     if(e.message!=='未登录'){ toast('加载失败: '+e.message,'warn'); }
   }
   if(activeTab==='files') loadDir('/workspace');
-  if(activeTab==='res'){ loadScanCfg(); scanDisk(); }
   if(activeTab==='alert') alertLoad();
 })();
 </script>
