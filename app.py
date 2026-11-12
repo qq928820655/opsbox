@@ -694,6 +694,18 @@ def _mem():
     }
 
 
+def _dola_acct(cmdline):
+    """从进程 cmdline 提取 dola 账号名（--user-data-dir=.../accounts/<账号>）。
+
+    仅浏览器主进程携带 user-data-dir；对齐 dola-pool tools_api._top_procs 的
+    chrome.<账号> 标注口径，便于在进程列表按内部账号识别与终止。"""
+    for seg in cmdline or []:
+        if seg.lstrip("-").startswith("user-data-dir="):
+            base = seg.split("=", 1)[1].rstrip("/").split("/")[-1]
+            return base or None
+    return None
+
+
 def _sample_procs():
     alive = set()
     for p in psutil.process_iter(["pid", "name", "username", "memory_percent", "status"]):
@@ -704,9 +716,19 @@ def _sample_procs():
                 c = {"proc": p, "cpu": 0.0}
                 _proc_cache[p.pid] = c
                 p.cpu_percent(interval=None)
+                created = True
             else:
                 c["cpu"] = p.cpu_percent(interval=None)
+                created = False
             c["info"] = p.info
+            if created:
+                try:
+                    nm = (p.info.get("name") or "").lower()
+                    acct = _dola_acct(p.cmdline())
+                    if acct and "chrom" in nm:
+                        c["info"]["name"] = f"chrome.{acct}"
+                except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                    pass
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
     for pid in [k for k in _proc_cache if k not in alive]:
