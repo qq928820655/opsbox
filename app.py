@@ -347,16 +347,27 @@ async def api_list(request: Request, path: str = "/"):
         full = os.path.join(p, name)
         try:
             st = os.lstat(full)
+            # is_dir 跟随符号链接：一个 `ln -s ../skills/animate animate` 就是
+            # 目录，点进去应该能浏览。此前这里写成 isdir and not islink，把
+            # 「链接指向目录」的条目一律降级成文件，前端于是按文件打开，而
+            # /api/read 又用会跟随链接的 isdir 判成目录回 400——表现就是列表
+            # 画成链接、点了提示「这是目录」却不跳转。
+            is_link = os.path.islink(full)
+            is_dir = os.path.isdir(full)
             entries.append({
                 "name": name,
-                "is_dir": os.path.isdir(full) and not os.path.islink(full),
-                "is_link": os.path.islink(full),
-                "size": 0 if os.path.isdir(full) else st.st_size,
+                "is_dir": is_dir,
+                "is_link": is_link,
+                # 悬空链接（目标不存在）既不进目录也读不到内容，单独标出来，
+                # 免得前端点它时报一个「不存在」的通用错误。
+                "broken_link": is_link and not os.path.exists(full),
+                "size": 0 if is_dir else st.st_size,
                 "mtime": int(st.st_mtime),
                 "mode": __import__("stat").filemode(st.st_mode),
             })
         except (PermissionError, OSError):
             entries.append({"name": name, "is_dir": False, "is_link": False,
+                            "broken_link": False,
                             "size": 0, "mtime": 0, "mode": "???", "error": True})
     entries.sort(key=lambda e: (not e["is_dir"], e["name"].lower()))
     return {"path": p, "entries": entries}
@@ -368,7 +379,10 @@ async def api_read(request: Request, path: str):
     p = _abs(path)
     _check_exists(p)
     if os.path.isdir(p):
-        _fail("这是目录")
+        # 用 200 + is_dir 而不是 400：编辑入口可能在别的路径上拿到一个目录
+        # （符号链接、竞态改名），前端据此改成进目录，比弹一句「这是目录」
+        # 然后什么都不做更有用。
+        return {"path": p, "is_dir": True}
     st = os.stat(p)
     if st.st_size > MAX_EDIT:
         return {"path": p, "binary": True, "too_big": True, "size": st.st_size}
@@ -624,10 +638,16 @@ async def api_search(request: Request, body: SearchBody):
                     if q in e.name.lower():
                         try:
                             st = e.stat(follow_symlinks=False)
+                            # 与 /api/list 同一套口径：is_dir 跟随链接（链接到
+                            # 目录就是目录），但不顺着链接往下走，免得环。
+                            is_link = e.is_symlink()
+                            is_dir = e.is_dir()
                             results.append({
                                 "path": e.path, "name": e.name,
-                                "is_dir": e.is_dir(follow_symlinks=False),
-                                "size": 0 if e.is_dir(follow_symlinks=False) else st.st_size,
+                                "is_dir": is_dir,
+                                "is_link": is_link,
+                                "broken_link": is_link and not os.path.exists(e.path),
+                                "size": 0 if is_dir else st.st_size,
                                 "mtime": int(st.st_mtime)})
                         except OSError:
                             pass

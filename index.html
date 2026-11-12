@@ -437,7 +437,7 @@ function fmtUptime(s){
   return (d? d+'天 ':'') + h+'小时' + m+'分';
 }
 function fileIcon(e){
-  if(e.is_dir) return '📁';
+  if(e.is_dir) return e.is_link ? '🔗' : '📁';
   if(e.is_link) return '🔗';
   const n = e.name.toLowerCase();
   if(/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/.test(n)) return '🖼';
@@ -494,7 +494,7 @@ function render(){
     tr.className = 'row' + (sel.has(full)?' selected':'');
     tr.innerHTML = `
       <td><input type="checkbox" ${sel.has(full)?'checked':''} data-p="${full}"></td>
-      <td class="c-name"><span class="name" data-p="${full}" data-dir="${e.is_dir?1:0}"><span class="ico">${fileIcon(e)}</span>${esc(e.name)}${e.is_link?' <span style="color:var(--dim);font-size:11px">→ 链接</span>':''}</span></td>
+      <td class="c-name"><span class="name" data-p="${full}" data-dir="${e.is_dir?1:0}" data-broken="${e.broken_link?1:0}"><span class="ico">${fileIcon(e)}</span>${esc(e.name)}${e.is_link?' <span style="color:var(--dim);font-size:11px">→ '+(e.broken_link?'失效链接':(e.is_dir?'目录链接':'链接'))+'</span>':''}</span></td>
       <td class="c-size">${e.is_dir?'<dir>':fmtSize(e.size)}</td>
       <td class="c-time">${fmtTime(e.mtime)}</td>
       <td class="c-mode">${e.mode||''}</td>
@@ -528,6 +528,8 @@ $('tbody').addEventListener('click', ev=>{
   const nm = ev.target.closest('.name[data-dir]');
   if(nm){
     const p = nm.dataset.p;
+    // 失效链接：目标已经不在了，进不去也读不到，直接说清楚。
+    if(nm.dataset.broken==='1'){ toast('失效的符号链接：目标不存在','warn'); return; }
     if(nm.dataset.dir==='1'){ loadDir(p); }
     else if(isImage(p)){ openPreview(p); }
     else openEditor(p);
@@ -640,6 +642,7 @@ $('previewOverlay').onclick = ()=> $('previewOverlay').classList.add('hidden');
 async function openEditor(p){
   try{
     const r = await api('api/read?path='+encodeURIComponent(p));
+    if(r.is_dir){ loadDir(p); return; }
     if(r.binary){ toast(r.too_big?'文件过大（>5MB），不支持在线编辑':'二进制文件，不支持在线编辑','warn'); return; }
     editPath = p; editDirty = false;
     $('edName').textContent = p;
