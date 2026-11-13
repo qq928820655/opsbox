@@ -847,14 +847,20 @@ def _public_base(request: Request, port: int, override: str) -> str:
     """
     if override:
         return override
-    host_header = request.headers.get("host") or ""
-    host = host_header.split(":")[0].strip()
+    # 反代场景优先取 X-Forwarded-Host（A#136）：dola 面板 /ops/* 代理会把
+    # 原始 Host 同时写入 host 与 x-forwarded-host；优先用后者并配合
+    # x-forwarded-proto，避免上游二次改写 Host 时再次退回内网地址。
+    host_header = (request.headers.get("x-forwarded-host")
+                   or request.headers.get("host") or "")
+    host = host_header.split(",")[0].strip().split(":")[0].strip()
     if not host:
         return f"http://127.0.0.1:{port}"
     prefix, sep, rest = host.partition("-")
     if sep and rest and prefix.isdigit():
         return f"https://{port}-{rest}"
-    scheme = request.url.scheme or "http"
+    scheme = (request.headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    if not scheme:
+        scheme = request.url.scheme or "http"
     # 本机回环地址按 http 处理（无 TLS）；其余域名保持请求协议
     if host in ("127.0.0.1", "localhost", "0.0.0.0"):
         return f"http://{host}:{port}"
