@@ -835,18 +835,30 @@ def _mask_token(tok: str) -> str:
 
 
 def _public_base(request: Request, port: int, override: str) -> str:
-    """推导内置应用的公网基址。
+    """推导内置应用的对外基址（A#133：不再回落 127.0.0.1）。
 
-    预览环境的域名形如 `8002-<id>.monkeycode-ai.live`，端口是主机名前缀，
-    把前缀换成目标端口即可得到同域的其他预览地址；非该形态时回落到本机地址。
+    优先级：
+    1. 环境变量显式覆盖（AITB_PUBLIC/LATENCY_PUBLIC/DOLA_PUBLIC）；
+    2. 预览环境 `8002-<id>.monkeycode-ai.live` 形态——把端口前缀换成目标端口；
+    3. 任意域名/端口访问：沿用请求的协议 + 主机名，只把端口换成目标端口
+       （用户实测：从非预览域名打开运维台时，按钮一律跳到 127.0.0.1，
+       外网根本访问不到）；
+    4. 仅在完全没有 Host 头（极少数本机探活）时才用 127.0.0.1。
     """
     if override:
         return override
-    host = (request.headers.get("host") or "").split(":")[0].strip()
+    host_header = request.headers.get("host") or ""
+    host = host_header.split(":")[0].strip()
+    if not host:
+        return f"http://127.0.0.1:{port}"
     prefix, sep, rest = host.partition("-")
     if sep and rest and prefix.isdigit():
         return f"https://{port}-{rest}"
-    return f"http://127.0.0.1:{port}"
+    scheme = request.url.scheme or "http"
+    # 本机回环地址按 http 处理（无 TLS）；其余域名保持请求协议
+    if host in ("127.0.0.1", "localhost", "0.0.0.0"):
+        return f"http://{host}:{port}"
+    return f"{scheme}://{host}:{port}"
 
 
 BRIDGE_TOKEN_FILE = os.path.join(BASE_DIR, "bridge_token.json")
