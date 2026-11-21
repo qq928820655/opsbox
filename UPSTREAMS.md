@@ -1,12 +1,12 @@
 # 接入的上游来源登记
 
-opsbox 自身是原创仓库（`qq928820655/opsbox`），但它通过下拉菜单**内置接入**了两个独立部署的上游应用。本文件登记这些上游的 git 来源，供后续更新与回溯使用。
+opsbox 自身是原创仓库（`qq928820655/opsbox`），但它通过下拉菜单**内置接入**了三个独立部署的上游应用。本文件登记这些上游的 git 来源，供后续更新与回溯使用。
 
 ## 一览
 
 | 应用 | 上游 git 仓库 | 分支 | 接入端口 | 接入方式 |
 |---|---|---|---|---|
-| ai-terminal-bridge | https://github.com/qq928820655/ai-terminal-bridge.git | `main` | 8787 | 令牌签发 + 免登录跳转 |
+| ai-terminal-bridge | https://github.com/qq928820655/ai-terminal-bridge.git | `main` | 8790 | 令牌签发 + 免登录跳转 |
 | latency-test | https://github.com/qq928820655/latency-test.git | `master` | 8005 | 直接跳转 |
 | dola-pool | https://github.com/changzhangpp/dola-poolmanage.git | `dola-pool-release` | 8004 | 直接跳转（独立部署，install.sh 不托管） |
 
@@ -22,7 +22,7 @@ opsbox 自身是原创仓库（`qq928820655/opsbox`），但它通过下拉菜�
 
 ## 接入契约
 
-### ai-terminal-bridge（8787）
+### ai-terminal-bridge（8790）
 
 opsbox 依赖的 bridge 接口：
 
@@ -35,7 +35,7 @@ opsbox 依赖的 bridge 接口：
 opsbox 侧实现见 `app.py`：
 
 - `_aitb_mint_token()`：向 bridge 申请 7 天有效期令牌，落盘缓存到 `bridge_token.json`
-- `_public_base()`：按 Host 头把 `8002-xxx` 换算成 `8787-xxx`
+- `_public_base()`：优先读 `X-Forwarded-Host`（回退 `Host`），把 `8002-xxx` 换算成 `8790-xxx`；非预览域名沿用请求的协议与主机名，只换端口
 - `GET /api/launch/bridge`：返回带令牌的免登录 URL
 
 ### latency-test（8005）
@@ -62,7 +62,7 @@ opsbox 通过环境变量定位上游，默认值即本机部署：
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `AITB_URL` | `http://127.0.0.1:8787` | bridge 内网地址 |
+| `AITB_URL` | `http://127.0.0.1:8790` | bridge 内网地址 |
 | `AITB_TOKEN` | 复用 `OPS_PASSWORD` | 调 bridge 管理接口的统一令牌 |
 | `AITB_PUBLIC` | 空（按 Host 推导） | bridge 公网基址覆盖 |
 | `LATENCY_URL` | `http://127.0.0.1:8005` | 链路探针内网地址 |
@@ -82,6 +82,6 @@ opsbox 通过环境变量定位上游，默认值即本机部署：
 
 ## 相关文件
 
-- `app.py`：接入实现（`/api/launch/bridge`、`/api/launch/latency`）
+- `app.py`：接入实现（`/api/launch/bridge`、`/api/launch/latency`、`/api/launch/dola`）
 - `.env.example`：配置项模板
 - `index.html`：下拉菜单入口

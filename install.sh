@@ -9,6 +9,8 @@
 # 非交互参数:
 #   sh install.sh --dir /opt/opsbox --password YOUR_TOKEN --with-bridge --with-latency
 #   sh install.sh --ops-only --no-start --port 8002
+#   注意 --dir 是「安装根目录」，应用落在其下的 opsbox/ 子目录；
+#   --dir /opt/opsbox 会得到 /opt/opsbox/opsbox。manage.sh 生成在根目录。
 # 升级与端口冲突:
 #   目标目录已是同款应用 -> 自动升级并保留 .env（密码/端口沿用已有配置）
 #   目标端口被其他应用占用 -> 交互询问：1)顺延可用端口(默认) 2)指定端口 3)停止占用者后使用

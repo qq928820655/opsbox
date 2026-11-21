@@ -11,6 +11,32 @@
 
 ## 快速开始
 
+### 一键安装（推荐）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/qq928820655/opsbox/main/install.sh | sh
+```
+
+脚本会自动下载 opsbox、安装 Python 依赖、生成随机访问密码，并按需一并部署
+终端桥接（ai-terminal-bridge，默认 8790）与链路探针（latency-test，默认 8005），
+最后在安装目录生成 `manage.sh` 用于日常起停：
+
+```bash
+sh <安装目录>/manage.sh          # 交互菜单：状态 / 启动 / 停止 / 重启
+```
+
+无终端环境（cron、CI）按默认值全量安装，也可显式指定参数：
+
+```bash
+sh install.sh --dir /opt/opsbox --password YOUR_TOKEN --with-bridge --with-latency
+sh install.sh --ops-only --no-start --port 8002
+```
+
+安装目录下会形成 `opsbox/`、`ai-terminal-bridge/`、`latency-test/` 三个子目录，
+`manage.sh` 位于安装目录根部。
+
+### 手动部署
+
 ```bash
 cp .env.example .env    # 设置 OPS_PASSWORD
 ./start.sh              # 默认 8002
@@ -27,13 +53,14 @@ cp .env.example .env    # 设置 OPS_PASSWORD
 |---|---|---|
 | `OPS_PORT` | `8002` | 监听端口 |
 | `OPS_PASSWORD` | 代码内默认值 | 登录密码 |
-| `AITB_URL` | `http://127.0.0.1:8787` | 终端桥接内网地址 |
+| `AITB_URL` | `http://127.0.0.1:8790` | 终端桥接内网地址 |
 | `AITB_TOKEN` | 复用 `OPS_PASSWORD` | 调终端桥接管理接口的令牌 |
 | `AITB_PUBLIC` | 空（按 Host 推导） | 终端桥接公网基址覆盖 |
 | `LATENCY_URL` | `http://127.0.0.1:8005` | 链路探针内网地址 |
 | `LATENCY_PUBLIC` | 空（按 Host 推导） | 链路探针公网基址覆盖 |
 | `DOLA_URL` | `http://127.0.0.1:8004` | 出片面板（dola-pool）内网地址 |
 | `DOLA_PUBLIC` | 空（按 Host 推导） | 出片面板公网基址覆盖 |
+| `DOLA_ADMIN_KEY` | 代码内默认值 | 调 dola 面板管理接口的 `X-Admin-Key`（释放浏览器等管理动作） |
 
 ## 接口
 
@@ -43,7 +70,7 @@ cp .env.example .env    # 设置 OPS_PASSWORD
 
 预警：`GET|POST /api/alert/config`、`POST /api/alert/test`
 
-内置应用跳转：`GET /api/launch/bridge`、`GET /api/launch/latency`
+内置应用跳转：`GET /api/launch/bridge`、`GET /api/launch/latency`、`GET /api/launch/dola`
 
 鉴权：同一密码登录，HMAC token；API 用 `X-Auth-Token` 头或 `?token=` 查询串。
 

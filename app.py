@@ -36,7 +36,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PASSWORD = (os.environ.get("OPS_PASSWORD") or os.environ.get("FB_PASSWORD")
             or os.environ.get("RM_PASSWORD") or "qq928820655")
 # 运维工作台内置应用（统一登录：复用 OPS_PASSWORD 作为 bridge 管理令牌）
-AITB_URL = (os.environ.get("AITB_URL") or "http://127.0.0.1:8787").rstrip("/")
+AITB_URL = (os.environ.get("AITB_URL") or "http://127.0.0.1:8790").rstrip("/")
 AITB_TOKEN = os.environ.get("AITB_TOKEN") or PASSWORD
 LATENCY_URL = (os.environ.get("LATENCY_URL") or "http://127.0.0.1:8005").rstrip("/")
 AITB_PUBLIC = (os.environ.get("AITB_PUBLIC") or "").rstrip("/")
@@ -927,12 +927,12 @@ def _aitb_mint_token() -> str:
 
 
 def _aitb_port() -> int:
-    """本机个性化：bridge 实际端口从 AITB_URL 解析（上游硬编码 8787，本机部署在 8790）。"""
+    """bridge 实际端口从 AITB_URL 解析，缺省回退 8790（与 ai-terminal-bridge 默认一致）。"""
     try:
         p = urllib.parse.urlparse(AITB_URL).port
     except ValueError:
         p = None
-    return p or 8787
+    return p or 8790
 
 
 @app.get("/api/launch/bridge")
